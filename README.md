@@ -17,47 +17,67 @@ The MVP never deletes, overwrites, replaces, or automatically mutates source med
 
 ## Requirements
 
-- Python 3.12+
-- Node.js 20+
-- `ffmpeg` and `ffprobe` available on `PATH`
+- Docker Compose
+- A local or mounted media directory
 
-For Docker installs, only Docker Compose is required on the host. The image build supplies Node.js, Python, `ffmpeg`, and `ffprobe`.
+The published container image supplies Python, Node.js-built frontend assets, `ffmpeg`, and `ffprobe`.
 
 ## Docker Compose Install
 
-This is the recommended install path for a seedbox or home server.
+This is the recommended install path for a seedbox or home server. It uses the published GHCR image and does not require cloning the repository.
+
+Create an install directory:
 
 ```bash
-git clone git@github.com:jonhowe/Media-Atlas.git
-cd Media-Atlas
-
-cp .env.docker.example .env
+mkdir -p ~/media-atlas
+cd ~/media-atlas
 ```
 
-Edit `.env` so `MEDIA_ATLAS_MEDIA_ROOT` points at the media directory on the Docker host:
+Create `.env` with the host path to your media:
 
 ```bash
 MEDIA_ATLAS_PORT=8000
 MEDIA_ATLAS_MEDIA_ROOT=/mnt/media
 MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS=/media
+MEDIA_ATLAS_SCAN_CONCURRENCY=2
+MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS=60
+MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS=0
 ```
 
-Start the app:
-
-```bash
-docker compose up -d --build
-```
-
-After a GHCR image has been published, you can skip the local build by replacing the Compose `build` block with:
+Create `docker-compose.yml`:
 
 ```yaml
-image: ghcr.io/jonhowe/media-atlas:latest
+services:
+  media-atlas:
+    image: ghcr.io/jonhowe/media-atlas:latest
+    container_name: media-atlas
+    restart: unless-stopped
+    ports:
+      - "${MEDIA_ATLAS_PORT:-8000}:8000"
+    environment:
+      MEDIA_ATLAS_HOST: "0.0.0.0"
+      MEDIA_ATLAS_PORT: "8000"
+      MEDIA_ATLAS_DATA_DIR: "/app/data"
+      MEDIA_ATLAS_REPORTS_DIR: "/app/reports"
+      MEDIA_ATLAS_LOGS_DIR: "/app/logs"
+      MEDIA_ATLAS_TRANSCODE_STAGING_DIR: "/app/transcode-staging"
+      MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS: "${MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS:-/media}"
+      MEDIA_ATLAS_SCAN_CONCURRENCY: "${MEDIA_ATLAS_SCAN_CONCURRENCY:-2}"
+      MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS:-60}"
+      MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS:-0}"
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+      - ./transcode-staging:/app/transcode-staging
+      - ${MEDIA_ATLAS_MEDIA_ROOT:?Set MEDIA_ATLAS_MEDIA_ROOT in .env}:/media:ro
 ```
 
-or by running the published image directly:
+Pull and start the app:
 
 ```bash
-docker pull ghcr.io/jonhowe/media-atlas:latest
+docker compose pull
+docker compose up -d
 ```
 
 Open the app from another machine on the LAN:
@@ -81,7 +101,7 @@ host:      MEDIA_ATLAS_MEDIA_ROOT
 container: /media
 ```
 
-That means the path you add in the Media Atlas UI should be the in-container path, for example:
+Media Atlas runs inside the container, so paths added in the UI must use the container path. Use `/media` or subpaths under `/media`, for example:
 
 ```text
 /media
@@ -89,9 +109,9 @@ That means the path you add in the Media Atlas UI should be the in-container pat
 /media/TV
 ```
 
-not the host path such as `/mnt/media`, unless you also mount that exact path into the container.
+Do not add the host path such as `/mnt/media` in the UI unless you also mount that exact path into the container.
 
-Persistent app data is bind-mounted into the project directory:
+Persistent app data is bind-mounted into the install directory:
 
 ```text
 ./data                SQLite database
@@ -105,27 +125,30 @@ Source media is mounted read-only. Staged transcode output is written separately
 Useful commands:
 
 ```bash
+docker compose pull
+docker compose up -d
 docker compose logs -f media-atlas
 docker compose restart media-atlas
 docker compose down
-docker compose pull
-docker compose up -d --build
 ```
 
-## Publishing the Container
+## Publishing
 
-GitHub Actions publishes the container image to GHCR.
+GitHub Actions publishes images to GHCR.
 
-- Pull requests and pushes to `main` run Docker image validation.
-- Pushes to `main` publish `ghcr.io/jonhowe/media-atlas:latest` and `sha-<commit>`.
-- Manual workflow runs publish `ghcr.io/jonhowe/media-atlas:<tag>` and `sha-<commit>`, defaulting to `latest`.
-- Published GitHub releases publish `sha-<commit>`, the release tag, and `latest`.
-- Docker builds use GitHub Actions layer caching.
-- CI and publish workflows scan the image with Trivy and fail on fixed high/critical vulnerabilities.
-- Published images include SBOM and provenance attestations.
-- Release notes are updated with a Docker pull command when the release workflow runs.
+- `ghcr.io/jonhowe/media-atlas:latest` tracks the latest published `main` build.
+- Release tags publish matching image tags, for example `ghcr.io/jonhowe/media-atlas:v0.1.0`.
+- Every published image also gets a commit-pinned `sha-<commit>` tag.
+- Builds use GitHub Actions layer caching, Trivy scanning, SBOM attestations, and provenance attestations.
 
-## Backend
+## Development Install
+
+Local development requires Python 3.12+, Node.js 20+, and `ffmpeg`/`ffprobe` on `PATH`.
+
+```bash
+git clone git@github.com:jonhowe/Media-Atlas.git
+cd Media-Atlas
+```
 
 ```bash
 cd backend
@@ -135,10 +158,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## Frontend
-
 ```bash
-cd frontend
+cd ../frontend
 npm install
 npm run dev
 ```
@@ -147,7 +168,7 @@ Open the Vite URL, usually `http://127.0.0.1:5173`.
 
 ## Configuration
 
-Configuration is environment-variable based so the app can move into a container later without changing code.
+Configuration is environment-variable based so the same settings work for the GHCR container and local development.
 
 ```bash
 MEDIA_ATLAS_HOST=127.0.0.1
@@ -162,7 +183,3 @@ MEDIA_ATLAS_FFMPEG_PATH=ffmpeg
 MEDIA_ATLAS_SCAN_CONCURRENCY=2
 MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS=60
 ```
-
-## Future Container Work
-
-The MVP runs directly on the host. Future Docker support should bind mount media roots, `data`, `reports`, `logs`, and `transcode-staging`; package `ffmpeg`/`ffprobe`; add a healthcheck; and document host-path to container-path mapping.
