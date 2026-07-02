@@ -142,7 +142,7 @@ def load_config() -> AppConfig:
         transcoder=TranscoderConfig(
             ffmpeg_path=os.getenv("MEDIA_ATLAS_FFMPEG_PATH", "ffmpeg"),
             concurrency=1,
-            timeout_seconds=max(30, _int_env("MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS", 0)),
+            timeout_seconds=max(0, _int_env("MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS", 0)),
             staging_dir=staging_dir,
             duration_tolerance_seconds=float(
                 os.getenv("MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS", "3")

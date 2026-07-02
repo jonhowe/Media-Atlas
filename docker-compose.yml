@@ -1,0 +1,31 @@
+services:
+  media-atlas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: media-atlas:local
+    container_name: media-atlas
+    restart: unless-stopped
+    ports:
+      - "${MEDIA_ATLAS_PORT:-8000}:8000"
+    environment:
+      MEDIA_ATLAS_HOST: "0.0.0.0"
+      MEDIA_ATLAS_PORT: "8000"
+      MEDIA_ATLAS_DATA_DIR: "/app/data"
+      MEDIA_ATLAS_REPORTS_DIR: "/app/reports"
+      MEDIA_ATLAS_LOGS_DIR: "/app/logs"
+      MEDIA_ATLAS_TRANSCODE_STAGING_DIR: "/app/transcode-staging"
+      MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS: "${MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS:-/media}"
+      MEDIA_ATLAS_SCAN_CONCURRENCY: "${MEDIA_ATLAS_SCAN_CONCURRENCY:-2}"
+      MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS:-60}"
+      MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS:-0}"
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+      - ./transcode-staging:/app/transcode-staging
+      # Set MEDIA_ATLAS_MEDIA_ROOT in .env, for example /mnt/media.
+      - ${MEDIA_ATLAS_MEDIA_ROOT:?Set MEDIA_ATLAS_MEDIA_ROOT in .env}:/media:ro
+      # Optional writable staging/output mount if you want staged transcodes
+      # outside the project directory. Leave unset to use ./transcode-staging.
+      # - ${MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT}:/app/transcode-staging

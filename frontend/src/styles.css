@@ -413,6 +413,28 @@ label {
   height: 100%;
 }
 
+.scanProgressCell {
+  display: grid;
+  gap: 6px;
+  min-width: 210px;
+}
+
+.progressHeader {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.progressHeader strong {
+  font-size: 14px;
+}
+
+.progressHeader span {
+  color: #667085;
+  font-size: 12px;
+}
+
 @media (max-width: 980px) {
   .app {
     grid-template-columns: 1fr;

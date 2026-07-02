@@ -208,6 +208,7 @@ data/
 reports/
 logs/
 transcode-staging/
+media/
 
 # Frontend dependencies and builds
 frontend/node_modules/

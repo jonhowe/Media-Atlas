@@ -306,21 +306,47 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
             </tr>
           </thead>
           <tbody>
-            {scans.map((scan) => (
-              <tr key={scan.id}>
-                <td>{scan.id}</td>
-                <td><StatusBadge status={scan.status} /></td>
-                <td>{scan.files_probed} probed, {scan.files_skipped} skipped, {scan.files_failed} failed</td>
-                <td>{scan.message}</td>
-                <td className="path">{scan.current_path}</td>
-                <td>{["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}</td>
-              </tr>
-            ))}
+            {scans.map((scan) => {
+              const progress = scanProgress(scan);
+              return (
+                <tr key={scan.id}>
+                  <td>{scan.id}</td>
+                  <td><StatusBadge status={scan.status} /></td>
+                  <td>
+                    <div className="scanProgressCell">
+                      <div className="progressHeader">
+                        <strong>{progress.percent}%</strong>
+                        <span>{progress.completed} / {progress.total || "?"} files</span>
+                      </div>
+                      <Progress value={progress.percent} />
+                      <div className="muted">
+                        {scan.files_probed} probed, {scan.files_skipped} skipped, {scan.files_failed} failed
+                      </div>
+                    </div>
+                  </td>
+                  <td>{scan.message}</td>
+                  <td className="path">{scan.current_path}</td>
+                  <td>{["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </Panel>
     </section>
   );
+}
+
+function scanProgress(scan: ScanJob) {
+  const completed = scan.files_probed + scan.files_skipped + scan.files_failed;
+  const total = scan.total_files_discovered;
+  const terminal = ["succeeded", "failed", "canceled"].includes(scan.status);
+  const percent = total > 0
+    ? Math.min(100, Math.round((completed / total) * 100))
+    : terminal
+      ? 100
+      : 0;
+  return { completed, total, percent };
 }
 
 function Library({ onToast }: { onToast: (message: string) => void }) {

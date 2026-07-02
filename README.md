@@ -21,6 +21,85 @@ The MVP never deletes, overwrites, replaces, or automatically mutates source med
 - Node.js 20+
 - `ffmpeg` and `ffprobe` available on `PATH`
 
+For Docker installs, only Docker Compose is required on the host. The image build supplies Node.js, Python, `ffmpeg`, and `ffprobe`.
+
+## Docker Compose Install
+
+This is the recommended install path for a seedbox or home server.
+
+```bash
+git clone git@github.com:jonhowe/Media-Atlas.git
+cd Media-Atlas
+
+cp .env.docker.example .env
+```
+
+Edit `.env` so `MEDIA_ATLAS_MEDIA_ROOT` points at the media directory on the Docker host:
+
+```bash
+MEDIA_ATLAS_PORT=8000
+MEDIA_ATLAS_MEDIA_ROOT=/mnt/media
+MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS=/media
+```
+
+Start the app:
+
+```bash
+docker compose up -d --build
+```
+
+Open the app from another machine on the LAN:
+
+```text
+http://SERVER_IP:8000/
+```
+
+For the seedbox shown earlier, that would be:
+
+```text
+http://192.168.1.106:8000/
+```
+
+### Docker Path Mapping
+
+The Compose file mounts the host media root read-only:
+
+```text
+host:      MEDIA_ATLAS_MEDIA_ROOT
+container: /media
+```
+
+That means the path you add in the Media Atlas UI should be the in-container path, for example:
+
+```text
+/media
+/media/Movies
+/media/TV
+```
+
+not the host path such as `/mnt/media`, unless you also mount that exact path into the container.
+
+Persistent app data is bind-mounted into the project directory:
+
+```text
+./data                SQLite database
+./reports             CSV/report output
+./logs                app and transcode logs
+./transcode-staging   staged transcode outputs
+```
+
+Source media is mounted read-only. Staged transcode output is written separately and source files are not modified by the MVP.
+
+Useful commands:
+
+```bash
+docker compose logs -f media-atlas
+docker compose restart media-atlas
+docker compose down
+docker compose pull
+docker compose up -d --build
+```
+
 ## Backend
 
 ```bash
