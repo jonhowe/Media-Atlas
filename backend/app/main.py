@@ -1,0 +1,639 @@
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Literal
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import db
+from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
+from .services.paths import is_within_allowed_browse_roots, resolve_existing_directory
+from .services.scanner import ScanManager
+from .services.transcodes import TranscodeManager, create_plan, get_plan
+
+app = FastAPI(title="Media Atlas", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+scan_manager = ScanManager()
+transcode_manager = TranscodeManager()
+
+
+class RootCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    path: str = Field(min_length=1)
+    enabled: bool = True
+    include_extensions: list[str] = Field(default_factory=lambda: DEFAULT_EXTENSIONS)
+    exclude_patterns: list[str] = Field(default_factory=lambda: DEFAULT_EXCLUDES)
+
+
+class RootUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    path: str | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+    include_extensions: list[str] | None = None
+    exclude_patterns: list[str] | None = None
+
+
+class PlanCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=180)
+    profile_id: int
+    file_ids: list[int] = Field(min_length=1)
+    notes: str | None = None
+
+
+class RunCreate(BaseModel):
+    plan_id: int
+    name: str | None = Field(default=None, max_length=180)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    db.init_db()
+    await transcode_manager.ensure_worker()
+
+
+@app.get("/api/health")
+async def health() -> dict[str, Any]:
+    database_available = False
+    try:
+        database_available = bool(db.query_one("SELECT 1 AS ok"))
+    except Exception:
+        database_available = False
+    ffprobe_available = shutil.which(CONFIG.scanner.ffprobe_path) is not None
+    ffmpeg_available = shutil.which(CONFIG.transcoder.ffmpeg_path) is not None
+    return {
+        "status": "ok" if database_available else "degraded",
+        "database_available": database_available,
+        "ffprobe_available": ffprobe_available,
+        "ffmpeg_available": ffmpeg_available,
+        "data_dir": str(CONFIG.data_dir),
+        "reports_dir": str(CONFIG.reports_dir),
+        "logs_dir": str(CONFIG.logs_dir),
+        "transcode_staging_dir": str(CONFIG.transcoder.staging_dir),
+    }
+
+
+@app.get("/api/settings")
+async def settings() -> dict[str, Any]:
+    return {
+        "host": CONFIG.host,
+        "port": CONFIG.port,
+        "data_dir": str(CONFIG.data_dir),
+        "reports_dir": str(CONFIG.reports_dir),
+        "logs_dir": str(CONFIG.logs_dir),
+        "transcode_staging_dir": str(CONFIG.transcoder.staging_dir),
+        "scan_concurrency": CONFIG.scanner.concurrency,
+        "transcode_concurrency": CONFIG.transcoder.concurrency,
+        "allowed_browse_roots": [str(path) for path in CONFIG.allowed_browse_roots],
+        "default_extensions": DEFAULT_EXTENSIONS,
+        "default_excludes": DEFAULT_EXCLUDES,
+    }
+
+
+@app.get("/api/roots")
+async def list_roots() -> list[dict[str, Any]]:
+    return [_inflate_root(row) for row in db.query_all("SELECT * FROM media_roots ORDER BY name")]
+
+
+@app.post("/api/roots")
+async def create_root(payload: RootCreate) -> dict[str, Any]:
+    try:
+        path = resolve_existing_directory(payload.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not os.access(path, os.R_OK):
+        raise HTTPException(status_code=400, detail="Path is not readable.")
+    now = db.utc_now()
+    try:
+        root_id = db.execute(
+            """
+            INSERT INTO media_roots (
+                name, path, enabled, include_extensions_json, exclude_patterns_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.name,
+                str(path),
+                1 if payload.enabled else 0,
+                db.dumps(payload.include_extensions),
+                db.dumps(payload.exclude_patterns),
+                now,
+                now,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=f"Could not create root: {exc}") from exc
+    return _inflate_root(db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,)) or {})
+
+
+@app.patch("/api/roots/{root_id}")
+async def update_root(root_id: int, payload: RootUpdate) -> dict[str, Any]:
+    root = db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,))
+    if not root:
+        raise HTTPException(status_code=404, detail="Root not found.")
+    updates: dict[str, Any] = {}
+    if payload.name is not None:
+        updates["name"] = payload.name
+    if payload.path is not None:
+        try:
+            updates["path"] = str(resolve_existing_directory(payload.path))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.enabled is not None:
+        updates["enabled"] = 1 if payload.enabled else 0
+    if payload.include_extensions is not None:
+        updates["include_extensions_json"] = db.dumps(payload.include_extensions)
+    if payload.exclude_patterns is not None:
+        updates["exclude_patterns_json"] = db.dumps(payload.exclude_patterns)
+    if not updates:
+        return _inflate_root(root)
+    updates["updated_at"] = db.utc_now()
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    db.execute(
+        f"UPDATE media_roots SET {assignments} WHERE id = ?",
+        tuple(updates.values()) + (root_id,),
+    )
+    return _inflate_root(db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,)) or {})
+
+
+@app.delete("/api/roots/{root_id}")
+async def delete_root(root_id: int) -> dict[str, Any]:
+    root = db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,))
+    if not root:
+        raise HTTPException(status_code=404, detail="Root not found.")
+    files = db.query_all("SELECT id FROM files WHERE root_id = ?", (root_id,))
+    with db.connect() as connection:
+        for file_row in files:
+            connection.execute("DELETE FROM streams WHERE file_id = ?", (file_row["id"],))
+            connection.execute("DELETE FROM chapters WHERE file_id = ?", (file_row["id"],))
+        connection.execute("DELETE FROM files WHERE root_id = ?", (root_id,))
+        connection.execute("DELETE FROM media_roots WHERE id = ?", (root_id,))
+    return {"deleted": True}
+
+
+@app.get("/api/directory-browser")
+async def directory_browser(path: str | None = None) -> dict[str, Any]:
+    if not CONFIG.directory_browser_enabled:
+        raise HTTPException(status_code=404, detail="Directory browser is disabled.")
+    requested = Path(path).expanduser().resolve() if path else CONFIG.allowed_browse_roots[0]
+    if not is_within_allowed_browse_roots(requested):
+        raise HTTPException(status_code=403, detail="Path is outside allowed browse roots.")
+    if not requested.exists() or not requested.is_dir():
+        raise HTTPException(status_code=400, detail="Path is not an existing directory.")
+    directories = []
+    try:
+        for item in sorted(requested.iterdir(), key=lambda child: child.name.lower()):
+            if item.is_dir():
+                directories.append({"name": item.name, "path": str(item), "readable": os.access(item, os.R_OK)})
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    parent = requested.parent if requested.parent != requested else None
+    return {
+        "path": str(requested),
+        "parent": str(parent) if parent and is_within_allowed_browse_roots(parent) else None,
+        "directories": directories,
+        "allowed_roots": [str(root) for root in CONFIG.allowed_browse_roots],
+    }
+
+
+@app.post("/api/scans")
+async def start_scan() -> dict[str, Any]:
+    return await scan_manager.start_scan()
+
+
+@app.get("/api/scans")
+async def list_scans(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    return db.query_all("SELECT * FROM scan_jobs ORDER BY id DESC LIMIT ?", (limit,))
+
+
+@app.get("/api/scans/{scan_id}")
+async def get_scan(scan_id: int) -> dict[str, Any]:
+    scan = db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,))
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+    scan["errors"] = db.query_all("SELECT * FROM scan_errors WHERE scan_job_id = ? ORDER BY id DESC", (scan_id,))
+    return scan
+
+
+@app.post("/api/scans/{scan_id}/cancel")
+async def cancel_scan(scan_id: int) -> dict[str, Any]:
+    scan_manager.cancel_scan(scan_id)
+    return db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,)) or {"id": scan_id}
+
+
+@app.get("/api/scans/{scan_id}/events")
+async def scan_events(scan_id: int) -> StreamingResponse:
+    async def stream() -> Any:
+        while True:
+            scan = db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,))
+            if not scan:
+                yield "event: error\ndata: {\"detail\":\"Scan not found\"}\n\n"
+                return
+            yield f"data: {json.dumps(scan)}\n\n"
+            if scan["status"] not in {"queued", "running"}:
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/media")
+async def list_media(
+    query: str | None = None,
+    root_id: int | None = None,
+    extension: str | None = None,
+    container: str | None = None,
+    video_codec: str | None = None,
+    audio_codec: str | None = None,
+    resolution: str | None = None,
+    recommendation_category: str | None = None,
+    is_missing: bool | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    sort: str = "filename",
+    direction: Literal["asc", "desc"] = "asc",
+) -> dict[str, Any]:
+    where, params = _media_filters(
+        query,
+        root_id,
+        extension,
+        container,
+        video_codec,
+        audio_codec,
+        resolution,
+        recommendation_category,
+        is_missing,
+    )
+    sort_column = _sort_column(sort)
+    offset = (page - 1) * page_size
+    total = db.query_one(f"SELECT COUNT(*) AS total FROM files f {where}", tuple(params)) or {"total": 0}
+    items = db.query_all(
+        f"""
+        SELECT f.*, r.name AS root_name
+        FROM files f
+        LEFT JOIN media_roots r ON r.id = f.root_id
+        {where}
+        ORDER BY {sort_column} {direction.upper()}, f.id ASC
+        LIMIT ? OFFSET ?
+        """,
+        tuple(params) + (page_size, offset),
+    )
+    return {"items": [_inflate_file(row) for row in items], "page": page, "page_size": page_size, "total": total["total"]}
+
+
+@app.get("/api/media/{file_id}")
+async def get_media(file_id: int) -> dict[str, Any]:
+    row = db.query_one(
+        """
+        SELECT f.*, r.name AS root_name
+        FROM files f
+        LEFT JOIN media_roots r ON r.id = f.root_id
+        WHERE f.id = ?
+        """,
+        (file_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Media file not found.")
+    item = _inflate_file(row)
+    item["streams"] = db.query_all("SELECT * FROM streams WHERE file_id = ? ORDER BY stream_index", (file_id,))
+    item["chapters"] = db.query_all("SELECT * FROM chapters WHERE file_id = ? ORDER BY chapter_index", (file_id,))
+    return item
+
+
+@app.get("/api/reports/summary")
+async def report_summary() -> dict[str, Any]:
+    totals = db.query_one(
+        """
+        SELECT COUNT(*) AS total_files,
+               COALESCE(SUM(size_bytes), 0) AS total_size_bytes,
+               COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds
+        FROM files
+        """
+    ) or {}
+    return {
+        **totals,
+        "by_video_codec": _group_report("primary_video_codec"),
+        "by_container": _group_report("container"),
+        "by_resolution": _group_report("resolution_bucket"),
+        "by_audio_codec": _group_report("primary_audio_codec"),
+        "by_recommendation": _group_report("recommendation_category"),
+        "largest_files": db.query_all(
+            """
+            SELECT id, filename, path, size_bytes, primary_video_codec, resolution_bucket, recommendation_category
+            FROM files
+            ORDER BY size_bytes DESC
+            LIMIT 10
+            """
+        ),
+        "recent_errors": db.query_all("SELECT * FROM scan_errors ORDER BY id DESC LIMIT 10"),
+    }
+
+
+@app.get("/api/reports/{report_name}")
+async def named_report(report_name: str) -> dict[str, Any]:
+    mapping = {
+        "video-codecs": "primary_video_codec",
+        "containers": "container",
+        "resolutions": "resolution_bucket",
+        "audio-codecs": "primary_audio_codec",
+        "recommendations": "recommendation_category",
+    }
+    if report_name == "largest-files":
+        return {"items": db.query_all("SELECT * FROM files ORDER BY size_bytes DESC LIMIT 100")}
+    if report_name == "errors":
+        return {"items": db.query_all("SELECT * FROM scan_errors ORDER BY id DESC LIMIT 200")}
+    if report_name == "candidates":
+        return {
+            "items": db.query_all(
+                """
+                SELECT * FROM files
+                WHERE recommendation_category IN ('Easy Win', 'Remux Only', 'Review')
+                ORDER BY size_bytes DESC
+                LIMIT 500
+                """
+            )
+        }
+    column = mapping.get(report_name)
+    if not column:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    return {"items": _group_report(column)}
+
+
+@app.get("/api/exports/{export_name}")
+async def export_csv(export_name: str) -> Response:
+    if export_name == "all-files.csv":
+        rows = db.query_all("SELECT * FROM files ORDER BY path")
+    elif export_name == "transcode-candidates.csv":
+        rows = db.query_all(
+            """
+            SELECT * FROM files
+            WHERE recommendation_category IN ('Easy Win', 'Remux Only', 'Review')
+            ORDER BY recommendation_category, size_bytes DESC
+            """
+        )
+    elif export_name == "scan-errors.csv":
+        rows = db.query_all("SELECT * FROM scan_errors ORDER BY id DESC")
+    elif export_name == "summary-by-codec.csv":
+        rows = _group_report("primary_video_codec")
+    elif export_name == "summary-by-container.csv":
+        rows = _group_report("container")
+    elif export_name == "summary-by-resolution.csv":
+        rows = _group_report("resolution_bucket")
+    elif export_name == "largest-files.csv":
+        rows = db.query_all("SELECT * FROM files ORDER BY size_bytes DESC LIMIT 500")
+    else:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    return _csv_response(export_name, rows)
+
+
+@app.get("/api/transcode-profiles")
+async def transcode_profiles() -> list[dict[str, Any]]:
+    return db.query_all("SELECT * FROM transcode_profiles ORDER BY id")
+
+
+@app.post("/api/transcode-plans")
+async def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
+    try:
+        return create_plan(payload.name, payload.profile_id, payload.file_ids, payload.notes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/transcode-plans")
+async def list_transcode_plans() -> list[dict[str, Any]]:
+    return db.query_all(
+        """
+        SELECT tp.*, p.name AS profile_name,
+               (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id) AS item_count
+        FROM transcode_plans tp
+        LEFT JOIN transcode_profiles p ON p.id = tp.profile_id
+        ORDER BY tp.id DESC
+        """
+    )
+
+
+@app.get("/api/transcode-plans/{plan_id}")
+async def read_transcode_plan(plan_id: int) -> dict[str, Any]:
+    try:
+        return get_plan(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/transcode-plans/{plan_id}/download.csv")
+async def download_plan_csv(plan_id: int) -> Response:
+    plan = await read_transcode_plan(plan_id)
+    return _csv_response(f"transcode-plan-{plan_id}.csv", plan["items"])
+
+
+@app.get("/api/transcode-plans/{plan_id}/download.sh")
+async def download_plan_shell(plan_id: int) -> Response:
+    plan = await read_transcode_plan(plan_id)
+    lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+    for item in plan["items"]:
+        if item.get("command_display"):
+            lines.append(item["command_display"])
+    body = "\n".join(lines) + "\n"
+    return Response(
+        body,
+        media_type="text/x-shellscript",
+        headers={"Content-Disposition": f'attachment; filename="transcode-plan-{plan_id}.sh"'},
+    )
+
+
+@app.post("/api/transcode-runs")
+async def create_transcode_run(payload: RunCreate) -> dict[str, Any]:
+    try:
+        return await transcode_manager.create_run(payload.plan_id, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/transcode-runs")
+async def list_transcode_runs(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
+    return db.query_all("SELECT * FROM transcode_runs ORDER BY id DESC LIMIT ?", (limit,))
+
+
+@app.get("/api/transcode-runs/{run_id}")
+async def read_transcode_run(run_id: int) -> dict[str, Any]:
+    run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
+    if not run:
+        raise HTTPException(status_code=404, detail="Transcode run not found.")
+    run["items"] = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
+    return run
+
+
+@app.post("/api/transcode-runs/{run_id}/cancel")
+async def cancel_transcode_run(run_id: int) -> dict[str, Any]:
+    transcode_manager.cancel_run(run_id)
+    return await read_transcode_run(run_id)
+
+
+@app.post("/api/transcode-runs/{run_id}/retry")
+async def retry_transcode_run(run_id: int) -> dict[str, Any]:
+    await transcode_manager.retry_run(run_id)
+    return await read_transcode_run(run_id)
+
+
+@app.get("/api/transcode-runs/{run_id}/events")
+async def transcode_run_events(run_id: int) -> StreamingResponse:
+    async def stream() -> Any:
+        while True:
+            run = await read_transcode_run(run_id)
+            yield f"data: {json.dumps(run)}\n\n"
+            if run["status"] not in {"queued", "running"}:
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/transcode-runs/{run_id}/items/{item_id}/log", response_class=PlainTextResponse)
+async def transcode_item_log(run_id: int, item_id: int) -> str:
+    item = db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="Run item not found.")
+    log_path = item.get("log_path")
+    if not log_path or not Path(log_path).exists():
+        return ""
+    text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    return text[-20000:]
+
+
+def _inflate_root(row: dict[str, Any]) -> dict[str, Any]:
+    row = dict(row)
+    row["enabled"] = bool(row.get("enabled"))
+    row["include_extensions"] = db.loads_json(row.pop("include_extensions_json", None), DEFAULT_EXTENSIONS)
+    row["exclude_patterns"] = db.loads_json(row.pop("exclude_patterns_json", None), DEFAULT_EXCLUDES)
+    return row
+
+
+def _inflate_file(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["is_missing"] = bool(item.get("is_missing"))
+    item["is_hdr"] = bool(item.get("is_hdr"))
+    item["is_interlaced"] = bool(item.get("is_interlaced"))
+    item["has_forced_subtitles"] = bool(item.get("has_forced_subtitles"))
+    item["has_image_subtitles"] = bool(item.get("has_image_subtitles"))
+    item["recommendation_reasons"] = db.loads_json(item.pop("recommendation_reasons_json", None), [])
+    item["recommendation_warnings"] = db.loads_json(item.pop("recommendation_warnings_json", None), [])
+    return item
+
+
+def _media_filters(*values: Any) -> tuple[str, list[Any]]:
+    (
+        query,
+        root_id,
+        extension,
+        container,
+        video_codec,
+        audio_codec,
+        resolution,
+        recommendation_category,
+        is_missing,
+    ) = values
+    conditions: list[str] = []
+    params: list[Any] = []
+    if query:
+        like = f"%{query}%"
+        conditions.append("(f.path LIKE ? OR f.filename LIKE ? OR f.directory LIKE ? OR f.recommendation_summary LIKE ?)")
+        params.extend([like, like, like, like])
+    simple_filters = [
+        ("f.root_id", root_id),
+        ("f.extension", extension),
+        ("f.container", container),
+        ("f.primary_video_codec", video_codec),
+        ("f.primary_audio_codec", audio_codec),
+        ("f.resolution_bucket", resolution),
+        ("f.recommendation_category", recommendation_category),
+    ]
+    for column, value in simple_filters:
+        if value not in (None, ""):
+            conditions.append(f"{column} = ?")
+            params.append(value)
+    if is_missing is not None:
+        conditions.append("f.is_missing = ?")
+        params.append(1 if is_missing else 0)
+    return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
+
+
+def _sort_column(sort: str) -> str:
+    allowed = {
+        "filename": "f.filename",
+        "size_bytes": "f.size_bytes",
+        "duration_seconds": "f.duration_seconds",
+        "bitrate_mbps": "f.bitrate_mbps",
+        "resolution": "f.height",
+        "video_codec": "f.primary_video_codec",
+        "container": "f.container",
+        "modified_time": "f.modified_time_ns",
+        "last_scanned": "f.last_scanned_at",
+        "recommendation": "f.recommendation_category",
+    }
+    return allowed.get(sort, "f.filename")
+
+
+def _group_report(column: str) -> list[dict[str, Any]]:
+    allowed = {
+        "primary_video_codec",
+        "container",
+        "resolution_bucket",
+        "primary_audio_codec",
+        "recommendation_category",
+    }
+    if column not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid report column.")
+    return db.query_all(
+        f"""
+        SELECT COALESCE({column}, 'Unknown') AS label,
+               COUNT(*) AS file_count,
+               COALESCE(SUM(size_bytes), 0) AS total_size_bytes,
+               COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds
+        FROM files
+        GROUP BY COALESCE({column}, 'Unknown')
+        ORDER BY total_size_bytes DESC, file_count DESC
+        """
+    )
+
+
+def _csv_response(filename: str, rows: list[dict[str, Any]]) -> Response:
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        output.write("")
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

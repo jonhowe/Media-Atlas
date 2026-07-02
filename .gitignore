@@ -203,6 +203,16 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Media Atlas runtime state
+data/
+reports/
+logs/
+transcode-staging/
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/
+
 # Ruff stuff:
 .ruff_cache/
 
