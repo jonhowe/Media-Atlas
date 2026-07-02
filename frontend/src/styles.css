@@ -326,6 +326,30 @@ label {
   padding-bottom: 8px;
 }
 
+.recentScans {
+  display: grid;
+  gap: 14px;
+}
+
+.recentScan {
+  border-bottom: 1px solid #eef2f6;
+  display: grid;
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+.recentScan:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.recentScanHeader {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
 .directoryList {
   display: grid;
   gap: 8px;
@@ -417,6 +441,29 @@ label {
   display: grid;
   gap: 6px;
   min-width: 210px;
+}
+
+.scanStats,
+.scanTiming {
+  display: grid;
+  gap: 4px;
+}
+
+.scanStats {
+  color: #475467;
+  font-size: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 190px;
+}
+
+.scanStats strong {
+  color: #1d2430;
+}
+
+.scanTiming {
+  color: #667085;
+  font-size: 12px;
+  min-width: 170px;
 }
 
 .progressHeader {

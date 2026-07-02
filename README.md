@@ -48,6 +48,18 @@ Start the app:
 docker compose up -d --build
 ```
 
+After a GHCR image has been published, you can skip the local build by replacing the Compose `build` block with:
+
+```yaml
+image: ghcr.io/jonhowe/media-atlas:latest
+```
+
+or by running the published image directly:
+
+```bash
+docker pull ghcr.io/jonhowe/media-atlas:latest
+```
+
 Open the app from another machine on the LAN:
 
 ```text
@@ -99,6 +111,19 @@ docker compose down
 docker compose pull
 docker compose up -d --build
 ```
+
+## Publishing the Container
+
+GitHub Actions publishes the container image to GHCR.
+
+- Pull requests and pushes to `main` run Docker image validation.
+- Pushes to `main` publish `ghcr.io/jonhowe/media-atlas:latest` and `sha-<commit>`.
+- Manual workflow runs publish `ghcr.io/jonhowe/media-atlas:<tag>` and `sha-<commit>`, defaulting to `latest`.
+- Published GitHub releases publish `sha-<commit>`, the release tag, and `latest`.
+- Docker builds use GitHub Actions layer caching.
+- CI and publish workflows scan the image with Trivy and fail on fixed high/critical vulnerabilities.
+- Published images include SBOM and provenance attestations.
+- Release notes are updated with a Docker pull command when the release workflow runs.
 
 ## Backend
 

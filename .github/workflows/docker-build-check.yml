@@ -1,0 +1,67 @@
+name: Docker build check
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-build-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: media-atlas:ci-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test image internals
+        run: |
+          docker run --rm media-atlas:ci-test \
+            bash -c "which ffmpeg && which ffprobe && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
+
+      - name: Smoke test HTTP health endpoint
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f media-atlas-ci >/dev/null 2>&1 || true' EXIT
+          docker run -d --name media-atlas-ci -p 8000:8000 media-atlas:ci-test
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs media-atlas-ci
+          exit 1
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: media-atlas:ci-test
+          format: table
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: "1"

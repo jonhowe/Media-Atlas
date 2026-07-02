@@ -134,7 +134,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
           <CompactList rows={runs} primary="name" secondary="status" />
         </Panel>
         <Panel title="Recent Scans">
-          <CompactList rows={scans} primary="message" secondary="status" />
+          <RecentScans scans={scans} />
         </Panel>
       </div>
     </section>
@@ -300,6 +300,8 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
               <th>ID</th>
               <th>Status</th>
               <th>Progress</th>
+              <th>Files</th>
+              <th>Timing</th>
               <th>Message</th>
               <th>Current file</th>
               <th></th>
@@ -308,10 +310,14 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
           <tbody>
             {scans.map((scan) => {
               const progress = scanProgress(scan);
+              const timing = scanTiming(scan);
               return (
                 <tr key={scan.id}>
                   <td>{scan.id}</td>
-                  <td><StatusBadge status={scan.status} /></td>
+                  <td>
+                    <StatusBadge status={scan.status} />
+                    {scan.files_failed > 0 && <div className="muted">{scan.files_failed} failed</div>}
+                  </td>
                   <td>
                     <div className="scanProgressCell">
                       <div className="progressHeader">
@@ -322,6 +328,21 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
                       <div className="muted">
                         {scan.files_probed} probed, {scan.files_skipped} skipped, {scan.files_failed} failed
                       </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="scanStats">
+                      <span><strong>{scan.total_files_discovered}</strong> discovered</span>
+                      <span><strong>{progress.completed}</strong> processed</span>
+                      <span><strong>{scan.files_probed}</strong> probed</span>
+                      <span><strong>{scan.files_skipped}</strong> skipped</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="scanTiming">
+                      <span>Created {formatDateTime(scan.created_at)}</span>
+                      <span>Started {formatDateTime(scan.started_at)}</span>
+                      <span>{timing.label} {timing.value}</span>
                     </div>
                   </td>
                   <td>{scan.message}</td>
@@ -347,6 +368,54 @@ function scanProgress(scan: ScanJob) {
       ? 100
       : 0;
   return { completed, total, percent };
+}
+
+function scanTiming(scan: ScanJob) {
+  const start = scan.started_at || scan.created_at;
+  const end = scan.finished_at || (["queued", "running"].includes(scan.status) ? new Date().toISOString() : undefined);
+  if (!start || !end) {
+    return { label: "Elapsed", value: "Unknown" };
+  }
+  const elapsedMs = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+  return {
+    label: scan.finished_at ? "Duration" : "Elapsed",
+    value: formatElapsed(elapsedMs)
+  };
+}
+
+function RecentScans({ scans }: { scans: ScanJob[] }) {
+  if (!scans.length) {
+    return <p className="muted">No scans yet.</p>;
+  }
+  return (
+    <div className="recentScans">
+      {scans.map((scan) => {
+        const progress = scanProgress(scan);
+        const timing = scanTiming(scan);
+        return (
+          <div className="recentScan" key={scan.id}>
+            <div className="recentScanHeader">
+              <strong>Scan #{scan.id}</strong>
+              <StatusBadge status={scan.status} />
+            </div>
+            <div className="progressHeader">
+              <strong>{progress.percent}%</strong>
+              <span>{progress.completed} / {progress.total || "?"} files</span>
+            </div>
+            <Progress value={progress.percent} />
+            <div className="scanStats">
+              <span><strong>{scan.files_probed}</strong> probed</span>
+              <span><strong>{scan.files_skipped}</strong> skipped</span>
+              <span><strong>{scan.files_failed}</strong> failed</span>
+              <span><strong>{timing.value}</strong> {timing.label.toLowerCase()}</span>
+            </div>
+            <div className="muted">{scan.message || "No message"}</div>
+            {scan.current_path && <div className="path">{scan.current_path}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function Library({ onToast }: { onToast: (message: string) => void }) {
@@ -854,4 +923,25 @@ function formatDuration(value: number) {
   const hours = value / 3600;
   if (hours > 24) return `${(hours / 24).toFixed(1)}d`;
   return `${hours.toFixed(1)}h`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "Not started";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function formatElapsed(milliseconds: number) {
+  const seconds = Math.floor(milliseconds / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
