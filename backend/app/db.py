@@ -404,6 +404,108 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS plex_sync_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  total_items INTEGER NOT NULL DEFAULT 0,
+  processed_items INTEGER NOT NULL DEFAULT 0,
+  matched_files INTEGER NOT NULL DEFAULT 0,
+  unmatched_files INTEGER NOT NULL DEFAULT 0,
+  unmatched_parts INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  error_message TEXT,
+  cancel_requested INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_plex_sync_jobs_status ON plex_sync_jobs(status);
+
+CREATE TABLE IF NOT EXISTS plex_libraries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  section_key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  type TEXT,
+  agent TEXT,
+  scanner TEXT,
+  language TEXT,
+  uuid TEXT,
+  updated_at TEXT NOT NULL,
+  raw_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS plex_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rating_key TEXT NOT NULL UNIQUE,
+  guid TEXT,
+  library_section_key TEXT,
+  library_section_title TEXT,
+  library_section_type TEXT,
+  type TEXT,
+  title TEXT,
+  sort_title TEXT,
+  year INTEGER,
+  show_title TEXT,
+  season_number INTEGER,
+  episode_number INTEGER,
+  summary TEXT,
+  content_rating TEXT,
+  audience_rating REAL,
+  user_rating REAL,
+  originally_available_at TEXT,
+  added_at TEXT,
+  updated_at TEXT,
+  last_viewed_at TEXT,
+  view_count INTEGER,
+  thumb TEXT,
+  art TEXT,
+  collections_json TEXT NOT NULL DEFAULT '[]',
+  genres_json TEXT NOT NULL DEFAULT '[]',
+  labels_json TEXT NOT NULL DEFAULT '[]',
+  raw_json TEXT NOT NULL,
+  last_synced_at TEXT NOT NULL,
+  is_stale INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_plex_items_library ON plex_items(library_section_key);
+CREATE INDEX IF NOT EXISTS idx_plex_items_type ON plex_items(type);
+CREATE INDEX IF NOT EXISTS idx_plex_items_title ON plex_items(title);
+CREATE INDEX IF NOT EXISTS idx_plex_items_show ON plex_items(show_title);
+CREATE INDEX IF NOT EXISTS idx_plex_items_year ON plex_items(year);
+
+CREATE TABLE IF NOT EXISTS plex_media_parts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plex_item_id INTEGER NOT NULL REFERENCES plex_items(id) ON DELETE CASCADE,
+  part_id TEXT,
+  file_path TEXT NOT NULL,
+  normalized_path TEXT NOT NULL,
+  size_bytes INTEGER,
+  duration_ms INTEGER,
+  container TEXT,
+  last_synced_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_plex_media_parts_item ON plex_media_parts(plex_item_id);
+CREATE INDEX IF NOT EXISTS idx_plex_media_parts_file ON plex_media_parts(file_path);
+CREATE INDEX IF NOT EXISTS idx_plex_media_parts_normalized ON plex_media_parts(normalized_path);
+
+CREATE TABLE IF NOT EXISTS plex_file_matches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  plex_item_id INTEGER REFERENCES plex_items(id) ON DELETE SET NULL,
+  plex_media_part_id INTEGER REFERENCES plex_media_parts(id) ON DELETE SET NULL,
+  match_status TEXT NOT NULL,
+  match_method TEXT NOT NULL,
+  path_match_detail TEXT,
+  matched_at TEXT NOT NULL,
+  UNIQUE(file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plex_file_matches_file ON plex_file_matches(file_id);
+CREATE INDEX IF NOT EXISTS idx_plex_file_matches_item ON plex_file_matches(plex_item_id);
+CREATE INDEX IF NOT EXISTS idx_plex_file_matches_status ON plex_file_matches(match_status);
 """
 
 

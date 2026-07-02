@@ -57,6 +57,95 @@ export type MediaFile = {
   streams?: Array<Record<string, unknown>>;
   chapters?: Array<Record<string, unknown>>;
   raw_probe_json?: string | null;
+  plex?: PlexMetadata | null;
+};
+
+export type PlexMetadata = {
+  match_status: string;
+  match_method?: string | null;
+  path_match_detail?: string | null;
+  rating_key?: string | null;
+  guid?: string | null;
+  library_section_key?: string | null;
+  library_section_title?: string | null;
+  library_section_type?: string | null;
+  type?: string | null;
+  title?: string | null;
+  sort_title?: string | null;
+  year?: number | null;
+  show_title?: string | null;
+  season_number?: number | null;
+  episode_number?: number | null;
+  summary?: string | null;
+  content_rating?: string | null;
+  audience_rating?: number | null;
+  user_rating?: number | null;
+  originally_available_at?: string | null;
+  added_at?: string | null;
+  updated_at?: string | null;
+  last_viewed_at?: string | null;
+  view_count?: number | null;
+  watched?: boolean;
+  thumb?: string | null;
+  art?: string | null;
+  collections?: string[];
+  genres?: string[];
+  labels?: string[];
+  file_path?: string | null;
+  normalized_path?: string | null;
+  raw_json?: string | null;
+};
+
+export type PlexPathMapping = {
+  plex_path_prefix: string;
+  media_atlas_path_prefix: string;
+};
+
+export type PlexSettings = {
+  enabled: boolean;
+  server_url: string;
+  token_configured: boolean;
+  token_hint: string;
+  selected_library_keys: string[];
+  timeout_seconds: number;
+  path_mappings: PlexPathMapping[];
+};
+
+export type PlexLibrary = {
+  section_key: string;
+  title: string;
+  type?: string | null;
+  agent?: string | null;
+  scanner?: string | null;
+  language?: string | null;
+  uuid?: string | null;
+  updated_at?: string | null;
+};
+
+export type PlexSyncJob = {
+  id: number;
+  status: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_items: number;
+  processed_items: number;
+  matched_files: number;
+  unmatched_files: number;
+  unmatched_parts: number;
+  message?: string | null;
+  error_message?: string | null;
+};
+
+export type PlexStatus = {
+  configured: boolean;
+  enabled: boolean;
+  server_url?: string | null;
+  last_sync?: PlexSyncJob | null;
+  matched_count: number;
+  unmatched_file_count: number;
+  unmatched_part_count: number;
+  latest_error?: string | null;
 };
 
 export type Summary = {
@@ -68,6 +157,7 @@ export type Summary = {
   by_resolution: ReportRow[];
   by_audio_codec: ReportRow[];
   by_recommendation: ReportRow[];
+  plex?: PlexStatus;
   largest_files: MediaFile[];
   recent_errors: Array<Record<string, unknown>>;
 };

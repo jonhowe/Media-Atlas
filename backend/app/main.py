@@ -18,6 +18,20 @@ from pydantic import BaseModel, Field
 from . import db
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
 from .services.paths import is_within_allowed_browse_roots, resolve_existing_directory
+from .services.plex import (
+    PlexError,
+    PlexSyncManager,
+    get_settings as get_plex_settings,
+    inflate_plex,
+    list_sync_jobs as list_plex_sync_jobs,
+    plex_join_clause,
+    plex_select_columns,
+    read_sync_job as read_plex_sync_job,
+    save_settings as save_plex_settings,
+    status_summary as plex_status_summary,
+    stored_libraries as stored_plex_libraries,
+    unmatched as plex_unmatched,
+)
 from .services.scanner import ScanManager
 from .services.transcodes import TranscodeManager, create_plan, get_plan
 
@@ -37,6 +51,7 @@ app.add_middleware(
 
 scan_manager = ScanManager()
 transcode_manager = TranscodeManager()
+plex_manager = PlexSyncManager()
 
 
 class RootCreate(BaseModel):
@@ -65,6 +80,21 @@ class PlanCreate(BaseModel):
 class RunCreate(BaseModel):
     plan_id: int
     name: str | None = Field(default=None, max_length=180)
+
+
+class PlexPathMapping(BaseModel):
+    plex_path_prefix: str = ""
+    media_atlas_path_prefix: str = ""
+
+
+class PlexSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    server_url: str | None = None
+    token: str | None = None
+    clear_token: bool = False
+    selected_library_keys: list[str] | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    path_mappings: list[PlexPathMapping] | None = None
 
 
 @app.on_event("startup")
@@ -109,6 +139,88 @@ async def settings() -> dict[str, Any]:
         "default_extensions": DEFAULT_EXTENSIONS,
         "default_excludes": DEFAULT_EXCLUDES,
     }
+
+
+@app.get("/api/plex/settings")
+async def plex_settings() -> dict[str, Any]:
+    return get_plex_settings(include_secret=False)
+
+
+@app.put("/api/plex/settings")
+async def update_plex_settings(payload: PlexSettingsUpdate) -> dict[str, Any]:
+    data = payload.model_dump(exclude_unset=True)
+    return save_plex_settings(data)
+
+
+@app.post("/api/plex/test-connection")
+async def test_plex_connection() -> dict[str, Any]:
+    try:
+        return await plex_manager.test_connection()
+    except PlexError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/plex/status")
+async def plex_status() -> dict[str, Any]:
+    return plex_status_summary()
+
+
+@app.get("/api/plex/libraries")
+async def plex_libraries(refresh: bool = False) -> list[dict[str, Any]]:
+    if refresh:
+        try:
+            return await plex_manager.refresh_libraries()
+        except PlexError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return stored_plex_libraries()
+
+
+@app.post("/api/plex/sync")
+async def start_plex_sync() -> dict[str, Any]:
+    try:
+        return await plex_manager.start_sync()
+    except PlexError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/plex/sync-jobs")
+async def get_plex_sync_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    return list_plex_sync_jobs(limit)
+
+
+@app.get("/api/plex/sync-jobs/{job_id}")
+async def get_plex_sync_job(job_id: int) -> dict[str, Any]:
+    job = read_plex_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Plex sync job not found.")
+    return job
+
+
+@app.get("/api/plex/sync-jobs/{job_id}/events")
+async def plex_sync_events(job_id: int) -> StreamingResponse:
+    async def stream() -> Any:
+        while True:
+            job = read_plex_sync_job(job_id)
+            if not job:
+                yield "event: error\ndata: {\"detail\":\"Plex sync job not found\"}\n\n"
+                return
+            yield f"data: {json.dumps(job)}\n\n"
+            if job["status"] not in {"queued", "running"}:
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.post("/api/plex/sync-jobs/{job_id}/cancel")
+async def cancel_plex_sync(job_id: int) -> dict[str, Any]:
+    plex_manager.cancel_sync(job_id)
+    return await get_plex_sync_job(job_id)
+
+
+@app.get("/api/plex/unmatched")
+async def get_plex_unmatched(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
+    return plex_unmatched(limit)
 
 
 @app.get("/api/roots")
@@ -271,6 +383,14 @@ async def list_media(
     resolution: str | None = None,
     recommendation_category: str | None = None,
     is_missing: bool | None = None,
+    plex_matched: bool | None = None,
+    plex_library: str | None = None,
+    plex_type: str | None = None,
+    plex_year: int | None = None,
+    plex_collection: str | None = None,
+    plex_genre: str | None = None,
+    plex_label: str | None = None,
+    plex_watched: bool | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     sort: str = "filename",
@@ -286,15 +406,25 @@ async def list_media(
         resolution,
         recommendation_category,
         is_missing,
+        plex_matched,
+        plex_library,
+        plex_type,
+        plex_year,
+        plex_collection,
+        plex_genre,
+        plex_label,
+        plex_watched,
     )
     sort_column = _sort_column(sort)
     offset = (page - 1) * page_size
-    total = db.query_one(f"SELECT COUNT(*) AS total FROM files f {where}", tuple(params)) or {"total": 0}
+    joins = plex_join_clause()
+    total = db.query_one(f"SELECT COUNT(*) AS total FROM files f {joins} {where}", tuple(params)) or {"total": 0}
     items = db.query_all(
         f"""
-        SELECT f.*, r.name AS root_name
+        SELECT f.*, r.name AS root_name, {plex_select_columns()}
         FROM files f
         LEFT JOIN media_roots r ON r.id = f.root_id
+        {joins}
         {where}
         ORDER BY {sort_column} {direction.upper()}, f.id ASC
         LIMIT ? OFFSET ?
@@ -307,10 +437,11 @@ async def list_media(
 @app.get("/api/media/{file_id}")
 async def get_media(file_id: int) -> dict[str, Any]:
     row = db.query_one(
-        """
-        SELECT f.*, r.name AS root_name
+        f"""
+        SELECT f.*, r.name AS root_name, {plex_select_columns()}
         FROM files f
         LEFT JOIN media_roots r ON r.id = f.root_id
+        {plex_join_clause()}
         WHERE f.id = ?
         """,
         (file_id,),
@@ -340,6 +471,7 @@ async def report_summary() -> dict[str, Any]:
         "by_resolution": _group_report("resolution_bucket"),
         "by_audio_codec": _group_report("primary_audio_codec"),
         "by_recommendation": _group_report("recommendation_category"),
+        "plex": plex_status_summary(),
         "largest_files": db.query_all(
             """
             SELECT id, filename, path, size_bytes, primary_video_codec, resolution_bucket, recommendation_category
@@ -540,6 +672,7 @@ def _inflate_file(row: dict[str, Any]) -> dict[str, Any]:
     item["has_image_subtitles"] = bool(item.get("has_image_subtitles"))
     item["recommendation_reasons"] = db.loads_json(item.pop("recommendation_reasons_json", None), [])
     item["recommendation_warnings"] = db.loads_json(item.pop("recommendation_warnings_json", None), [])
+    inflate_plex(item)
     return item
 
 
@@ -554,13 +687,29 @@ def _media_filters(*values: Any) -> tuple[str, list[Any]]:
         resolution,
         recommendation_category,
         is_missing,
+        plex_matched,
+        plex_library,
+        plex_type,
+        plex_year,
+        plex_collection,
+        plex_genre,
+        plex_label,
+        plex_watched,
     ) = values
     conditions: list[str] = []
     params: list[Any] = []
     if query:
         like = f"%{query}%"
-        conditions.append("(f.path LIKE ? OR f.filename LIKE ? OR f.directory LIKE ? OR f.recommendation_summary LIKE ?)")
-        params.extend([like, like, like, like])
+        conditions.append(
+            """
+            (
+                f.path LIKE ? OR f.filename LIKE ? OR f.directory LIKE ? OR
+                f.recommendation_summary LIKE ? OR pi.title LIKE ? OR
+                pi.show_title LIKE ? OR pi.sort_title LIKE ? OR pi.summary LIKE ?
+            )
+            """
+        )
+        params.extend([like, like, like, like, like, like, like, like])
     simple_filters = [
         ("f.root_id", root_id),
         ("f.extension", extension),
@@ -577,6 +726,28 @@ def _media_filters(*values: Any) -> tuple[str, list[Any]]:
     if is_missing is not None:
         conditions.append("f.is_missing = ?")
         params.append(1 if is_missing else 0)
+    if plex_matched is not None:
+        conditions.append("pfm.match_status = 'matched'" if plex_matched else "(pfm.id IS NULL OR pfm.match_status != 'matched')")
+    if plex_library:
+        conditions.append("pi.library_section_key = ?")
+        params.append(plex_library)
+    if plex_type:
+        conditions.append("pi.type = ?")
+        params.append(plex_type)
+    if plex_year is not None:
+        conditions.append("pi.year = ?")
+        params.append(plex_year)
+    json_filters = [
+        ("pi.collections_json", plex_collection),
+        ("pi.genres_json", plex_genre),
+        ("pi.labels_json", plex_label),
+    ]
+    for column, value in json_filters:
+        if value:
+            conditions.append(f"{column} LIKE ?")
+            params.append(f"%{value}%")
+    if plex_watched is not None:
+        conditions.append("COALESCE(pi.view_count, 0) > 0" if plex_watched else "COALESCE(pi.view_count, 0) = 0")
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
@@ -592,6 +763,9 @@ def _sort_column(sort: str) -> str:
         "modified_time": "f.modified_time_ns",
         "last_scanned": "f.last_scanned_at",
         "recommendation": "f.recommendation_category",
+        "plex_title": "pi.title",
+        "plex_year": "pi.year",
+        "plex_added": "pi.added_at",
     }
     return allowed.get(sort, "f.filename")
 

@@ -255,6 +255,22 @@ class TranscodeManager:
             """,
             (percent, time_seconds, progress.get("speed"), item_id),
         )
+        item = db.query_one("SELECT run_id FROM transcode_run_items WHERE id = ?", (item_id,))
+        if item:
+            self._refresh_run_progress(item["run_id"])
+
+    def _refresh_run_progress(self, run_id: int) -> None:
+        rows = db.query_all("SELECT progress_percent FROM transcode_run_items WHERE run_id = ?", (run_id,))
+        total = len(rows)
+        progress = round(sum(row["progress_percent"] or 0 for row in rows) / total, 2) if total else 0
+        db.execute(
+            """
+            UPDATE transcode_runs
+            SET progress_percent = ?
+            WHERE id = ?
+            """,
+            (progress, run_id),
+        )
 
     async def _verify_output(self, item: dict[str, Any], source_duration: float | None) -> tuple[str, str]:
         target = Path(item["target_path"])

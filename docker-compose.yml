@@ -1,9 +1,6 @@
 services:
   media-atlas:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: media-atlas:local
+    image: ghcr.io/jonhowe/media-atlas:latest
     container_name: media-atlas
     restart: unless-stopped
     ports:
@@ -19,6 +16,12 @@ services:
       MEDIA_ATLAS_SCAN_CONCURRENCY: "${MEDIA_ATLAS_SCAN_CONCURRENCY:-2}"
       MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS:-60}"
       MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS:-0}"
+      MEDIA_ATLAS_MARK_MISSING_FILES: "${MEDIA_ATLAS_MARK_MISSING_FILES:-true}"
+      MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED: "${MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED:-true}"
+      MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS: "${MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS:-3}"
+      MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT: "${MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT:-0.02}"
+      MEDIA_ATLAS_PLEX_URL: "${MEDIA_ATLAS_PLEX_URL:-}"
+      MEDIA_ATLAS_PLEX_TOKEN: "${MEDIA_ATLAS_PLEX_TOKEN:-}"
     volumes:
       - ./data:/app/data
       - ./reports:/app/reports

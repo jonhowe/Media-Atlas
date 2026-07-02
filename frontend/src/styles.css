@@ -248,6 +248,10 @@ main {
   grid-template-columns: minmax(160px, 1fr) minmax(260px, 2fr) auto;
 }
 
+.formGrid.plexSettingsGrid {
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+}
+
 .toolbar {
   align-items: center;
   grid-template-columns: minmax(260px, 1fr) auto auto auto;
@@ -316,6 +320,35 @@ label {
 .compactList {
   display: grid;
   gap: 10px;
+}
+
+.checkList,
+.mappingList {
+  display: grid;
+  gap: 8px;
+}
+
+.checkRow {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.checkRow input {
+  width: auto;
+}
+
+.mappingRow {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto;
+}
+
+.detailGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .compactList > div {
@@ -494,6 +527,9 @@ label {
   .grid.two,
   .metrics,
   .formGrid,
+  .formGrid.plexSettingsGrid,
+  .mappingRow,
+  .detailGrid,
   .toolbar {
     grid-template-columns: 1fr;
   }

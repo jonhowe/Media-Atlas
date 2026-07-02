@@ -5,6 +5,8 @@ Status: Project plan / build specification
 Primary user: A home media-library owner with roughly 10 TB of movies and TV files
 Primary goal: Build a simple, local-first web UI for scanning one or more media directories, analyzing codecs/containers/bitrates/streams, searching and reporting on the library, and planning safe transcoding work.
 
+Current docs note: this is the original engineering plan and may contain historical sequencing language. Use `README.md` as the current source of truth for installation, Docker usage, configuration variables, and implemented Plex enrichment behavior.
+
 ---
 
 ## 1. Executive Summary
@@ -1722,18 +1724,20 @@ The first truly useful version should include:
 
 Defer these until after the MVP:
 
-1. Plex integration.
+1. Plex integration. Initial read-only enrichment has since been implemented.
 2. Excel workbook export.
 3. Full-text search.
-4. Actual transcoding execution.
+4. Actual transcoding execution. Initial staged execution has since been implemented.
 5. Duplicate detection.
 6. Multi-user auth.
-7. Docker packaging.
+7. Advanced container deployment options beyond the current GHCR image and Docker Compose install.
 8. Native desktop wrapper.
 
 ---
 
 ## 26. Configuration
+
+Current configuration documentation lives in `README.md`.
 
 Use a simple config file or environment variables.
 

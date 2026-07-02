@@ -4,6 +4,11 @@ import type {
   Health,
   MediaFile,
   MediaRoot,
+  PlexLibrary,
+  PlexPathMapping,
+  PlexSettings,
+  PlexStatus,
+  PlexSyncJob,
   ScanJob,
   Summary,
   TranscodePlan,
@@ -76,7 +81,7 @@ export default function App() {
         {page === "reports" && <Reports />}
         {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
         {page === "runs" && <Runs onToast={setToast} />}
-        {page === "settings" && <Settings />}
+        {page === "settings" && <Settings onToast={setToast} />}
       </main>
     </div>
   );
@@ -129,6 +134,9 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
             <Status label="ffprobe" ok={Boolean(health?.ffprobe_available)} />
             <Status label="ffmpeg" ok={Boolean(health?.ffmpeg_available)} />
           </div>
+        </Panel>
+        <Panel title="Plex Enrichment">
+          <PlexStatusPanel status={summary?.plex} />
         </Panel>
         <Panel title="Recent Transcode Runs">
           <CompactList rows={runs} primary="name" secondary="status" />
@@ -421,20 +429,41 @@ function RecentScans({ scans }: { scans: ScanJob[] }) {
 function Library({ onToast }: { onToast: (message: string) => void }) {
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [total, setTotal] = useState(0);
+  const [libraries, setLibraries] = useState<PlexLibrary[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
+  const [plexMatched, setPlexMatched] = useState("");
+  const [plexLibrary, setPlexLibrary] = useState("");
+  const [plexType, setPlexType] = useState("");
+  const [plexYear, setPlexYear] = useState("");
+  const [plexCollection, setPlexCollection] = useState("");
+  const [plexGenre, setPlexGenre] = useState("");
+  const [plexLabel, setPlexLabel] = useState("");
+  const [plexWatched, setPlexWatched] = useState("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MediaFile | null>(null);
 
   useEffect(() => {
     refresh();
-  }, [query, category, page]);
+  }, [query, category, plexMatched, plexLibrary, plexType, plexYear, plexCollection, plexGenre, plexLabel, plexWatched, page]);
+
+  useEffect(() => {
+    api<PlexLibrary[]>("/api/plex/libraries").then(setLibraries).catch(() => setLibraries([]));
+  }, []);
 
   async function refresh() {
     try {
       const params = new URLSearchParams({ page: String(page), page_size: "50", sort: "size_bytes", direction: "desc" });
       if (query) params.set("query", query);
       if (category) params.set("recommendation_category", category);
+      if (plexMatched) params.set("plex_matched", plexMatched);
+      if (plexLibrary) params.set("plex_library", plexLibrary);
+      if (plexType) params.set("plex_type", plexType);
+      if (plexYear) params.set("plex_year", plexYear);
+      if (plexCollection) params.set("plex_collection", plexCollection);
+      if (plexGenre) params.set("plex_genre", plexGenre);
+      if (plexLabel) params.set("plex_label", plexLabel);
+      if (plexWatched) params.set("plex_watched", plexWatched);
       const result = await api<{ items: MediaFile[]; total: number }>(`/api/media?${params}`);
       setFiles(result.items);
       setTotal(result.total);
@@ -449,13 +478,36 @@ function Library({ onToast }: { onToast: (message: string) => void }) {
 
   return (
     <section className="stack">
-      <div className="toolbar">
-        <input value={query} onChange={(event) => { setPage(1); setQuery(event.target.value); }} placeholder="Search path, filename, folder, recommendation" />
+      <div className="toolbar wrap">
+        <input value={query} onChange={(event) => { setPage(1); setQuery(event.target.value); }} placeholder="Search path, filename, Plex title, show, recommendation" />
         <select value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="">All recommendations</option>
           {["Easy Win", "Remux Only", "Review", "Already Modern", "Skip", "Error", "Missing"].map((item) => (
             <option key={item}>{item}</option>
           ))}
+        </select>
+        <select value={plexMatched} onChange={(event) => { setPage(1); setPlexMatched(event.target.value); }}>
+          <option value="">All Plex matches</option>
+          <option value="true">Plex matched</option>
+          <option value="false">Plex unmatched</option>
+        </select>
+        <select value={plexLibrary} onChange={(event) => { setPage(1); setPlexLibrary(event.target.value); }}>
+          <option value="">All Plex libraries</option>
+          {libraries.map((library) => <option key={library.section_key} value={library.section_key}>{library.title}</option>)}
+        </select>
+        <select value={plexType} onChange={(event) => { setPage(1); setPlexType(event.target.value); }}>
+          <option value="">All Plex types</option>
+          <option value="movie">Movies</option>
+          <option value="episode">Episodes</option>
+        </select>
+        <input value={plexYear} onChange={(event) => { setPage(1); setPlexYear(event.target.value); }} placeholder="Plex year" />
+        <input value={plexCollection} onChange={(event) => { setPage(1); setPlexCollection(event.target.value); }} placeholder="Collection" />
+        <input value={plexGenre} onChange={(event) => { setPage(1); setPlexGenre(event.target.value); }} placeholder="Genre" />
+        <input value={plexLabel} onChange={(event) => { setPage(1); setPlexLabel(event.target.value); }} placeholder="Label" />
+        <select value={plexWatched} onChange={(event) => { setPage(1); setPlexWatched(event.target.value); }}>
+          <option value="">Any watched state</option>
+          <option value="true">Watched</option>
+          <option value="false">Unwatched</option>
         </select>
         <a className="button" href={exportUrl("all-files.csv")}>Export all files</a>
       </div>
@@ -745,15 +797,216 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
-function Settings() {
+function Settings({ onToast }: { onToast: (message: string) => void }) {
   const [settings, setSettings] = useState<Record<string, any> | null>(null);
+  const [plex, setPlex] = useState<PlexSettings | null>(null);
+  const [libraries, setLibraries] = useState<PlexLibrary[]>([]);
+  const [jobs, setJobs] = useState<PlexSyncJob[]>([]);
+  const [token, setToken] = useState("");
   useEffect(() => {
-    api<Record<string, any>>("/api/settings").then(setSettings);
+    refresh();
   }, []);
+
+  async function refresh() {
+    const [runtimeSettings, plexSettings, plexLibraries, syncJobs] = await Promise.all([
+      api<Record<string, any>>("/api/settings"),
+      api<PlexSettings>("/api/plex/settings"),
+      api<PlexLibrary[]>("/api/plex/libraries"),
+      api<PlexSyncJob[]>("/api/plex/sync-jobs")
+    ]);
+    setSettings(runtimeSettings);
+    setPlex(plexSettings);
+    setLibraries(plexLibraries);
+    setJobs(syncJobs);
+  }
+
+  async function savePlex() {
+    if (!plex) return;
+    try {
+      const payload: Record<string, unknown> = {
+        enabled: plex.enabled,
+        server_url: plex.server_url,
+        selected_library_keys: plex.selected_library_keys,
+        timeout_seconds: plex.timeout_seconds,
+        path_mappings: plex.path_mappings
+      };
+      if (token) payload.token = token;
+      const result = await api<PlexSettings>("/api/plex/settings", {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      setToken("");
+      setPlex(result);
+      onToast("Plex settings saved.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function testPlex() {
+    try {
+      const result = await api<{ library_count: number }>("/api/plex/test-connection", { method: "POST", body: "{}" });
+      onToast(`Connected to Plex. Found ${result.library_count} libraries.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function refreshLibraries() {
+    try {
+      setLibraries(await api<PlexLibrary[]>("/api/plex/libraries?refresh=true"));
+      onToast("Plex libraries refreshed.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function startSync() {
+    try {
+      await api<PlexSyncJob>("/api/plex/sync", { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Plex sync queued.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function cancelSync(jobId: number) {
+    await api(`/api/plex/sync-jobs/${jobId}/cancel`, { method: "POST", body: "{}" });
+    await refresh();
+  }
+
+  function updatePlex(next: Partial<PlexSettings>) {
+    setPlex((current) => current ? { ...current, ...next } : current);
+  }
+
+  function toggleLibrary(key: string) {
+    if (!plex) return;
+    const selected = new Set(plex.selected_library_keys);
+    selected.has(key) ? selected.delete(key) : selected.add(key);
+    updatePlex({ selected_library_keys: Array.from(selected) });
+  }
+
+  function updateMapping(index: number, key: keyof PlexPathMapping, value: string) {
+    if (!plex) return;
+    const mappings = [...plex.path_mappings];
+    mappings[index] = { ...mappings[index], [key]: value };
+    updatePlex({ path_mappings: mappings });
+  }
+
+  function addMapping() {
+    if (!plex) return;
+    updatePlex({
+      path_mappings: [...plex.path_mappings, { plex_path_prefix: "", media_atlas_path_prefix: "/media" }]
+    });
+  }
+
+  function removeMapping(index: number) {
+    if (!plex) return;
+    updatePlex({ path_mappings: plex.path_mappings.filter((_, current) => current !== index) });
+  }
+
   return (
-    <Panel title="Runtime Settings">
-      <pre className="json">{JSON.stringify(settings, null, 2)}</pre>
-    </Panel>
+    <section className="stack">
+      <Panel title="Plex">
+        {plex && (
+          <div className="stack">
+            <div className="formGrid plexSettingsGrid">
+              <label>
+                Enabled
+                <select value={plex.enabled ? "true" : "false"} onChange={(event) => updatePlex({ enabled: event.target.value === "true" })}>
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </label>
+              <label>
+                Server URL
+                <input value={plex.server_url || ""} onChange={(event) => updatePlex({ server_url: event.target.value })} placeholder="http://192.168.1.106:32400" />
+              </label>
+              <label>
+                Token {plex.token_configured && <span className="muted">{plex.token_hint}</span>}
+                <input value={token} onChange={(event) => setToken(event.target.value)} placeholder={plex.token_configured ? "Leave blank to keep current token" : "Plex token"} />
+              </label>
+              <label>
+                Timeout seconds
+                <input type="number" min="1" max="120" value={plex.timeout_seconds} onChange={(event) => updatePlex({ timeout_seconds: Number(event.target.value) || 10 })} />
+              </label>
+            </div>
+            <div className="rowActions">
+              <button className="primary" onClick={savePlex}>Save Plex settings</button>
+              <button onClick={testPlex}>Test connection</button>
+              <button onClick={refreshLibraries}>Refresh libraries</button>
+              <button onClick={startSync}>Start sync</button>
+            </div>
+            <div className="grid two">
+              <div>
+                <h3>Libraries</h3>
+                <div className="checkList">
+                  {libraries.length ? libraries.map((library) => (
+                    <label key={library.section_key} className="checkRow">
+                      <input
+                        type="checkbox"
+                        checked={plex.selected_library_keys.includes(library.section_key)}
+                        onChange={() => toggleLibrary(library.section_key)}
+                      />
+                      <span>{library.title} <span className="muted">{library.type}</span></span>
+                    </label>
+                  )) : <p className="muted">No Plex libraries stored yet.</p>}
+                </div>
+              </div>
+              <div>
+                <h3>Path mappings</h3>
+                <div className="mappingList">
+                  {plex.path_mappings.map((mapping, index) => (
+                    <div className="mappingRow" key={index}>
+                      <input value={mapping.plex_path_prefix} onChange={(event) => updateMapping(index, "plex_path_prefix", event.target.value)} placeholder="/mnt/media" />
+                      <input value={mapping.media_atlas_path_prefix} onChange={(event) => updateMapping(index, "media_atlas_path_prefix", event.target.value)} placeholder="/media" />
+                      <button className="danger" onClick={() => removeMapping(index)}>Remove</button>
+                    </div>
+                  ))}
+                  <button onClick={addMapping}>Add mapping</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Panel>
+      <Panel title="Recent Plex Sync Jobs">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Matches</th>
+              <th>Message</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id}>
+                <td>{job.id}</td>
+                <td><StatusBadge status={job.status} /></td>
+                <td>
+                  <div className="progressHeader">
+                    <strong>{plexSyncPercent(job)}%</strong>
+                    <span>{job.processed_items} / {job.total_items || "?"}</span>
+                  </div>
+                  <Progress value={plexSyncPercent(job)} />
+                </td>
+                <td>{job.matched_files} matched, {job.unmatched_files} file gaps, {job.unmatched_parts} Plex gaps</td>
+                <td>{job.error_message || job.message}</td>
+                <td>{["queued", "running"].includes(job.status) && <button onClick={() => cancelSync(job.id)}>Cancel</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+      <Panel title="Runtime Settings">
+        <pre className="json">{JSON.stringify(settings, null, 2)}</pre>
+      </Panel>
+    </section>
   );
 }
 
@@ -766,6 +1019,7 @@ function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number
             <th>File</th>
             <th>Root</th>
             <th>Size</th>
+            <th>Plex</th>
             <th>Video</th>
             <th>Audio</th>
             <th>Bitrate</th>
@@ -781,6 +1035,18 @@ function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number
               </td>
               <td>{file.root_name}</td>
               <td>{formatBytes(file.size_bytes)}</td>
+              <td>
+                {file.plex?.match_status === "matched" ? (
+                  <>
+                    <strong>{plexDisplayTitle(file)}</strong>
+                    <div className="muted">
+                      {file.plex.library_section_title || "Plex"} {file.plex.year ? `· ${file.plex.year}` : ""} {file.plex.watched ? "· watched" : ""}
+                    </div>
+                  </>
+                ) : (
+                  <Badge tone="muted">Unmatched</Badge>
+                )}
+              </td>
               <td>{file.resolution_bucket || "Unknown"} {file.primary_video_codec || ""} {file.is_hdr && <Badge tone="warn">HDR</Badge>}</td>
               <td>{file.primary_audio_codec || "Unknown"} {file.audio_stream_count > 1 && `+${file.audio_stream_count - 1}`}</td>
               <td>{file.bitrate_mbps ? `${file.bitrate_mbps} Mbps` : "Unknown"}</td>
@@ -818,6 +1084,37 @@ function DetailDrawer({ file, onClose }: { file: MediaFile; onClose: () => void 
           <ul>{file.recommendation_reasons?.map((reason) => <li key={reason}>{reason}</li>)}</ul>
           <ul>{file.recommendation_warnings?.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </Panel>
+        <Panel title="Plex Metadata">
+          {file.plex?.match_status === "matched" ? (
+            <div className="detailGrid">
+              <Metric label="Title" value={plexDisplayTitle(file)} />
+              <Metric label="Library" value={file.plex.library_section_title || "Unknown"} />
+              <Metric label="Type" value={file.plex.type || "Unknown"} />
+              <Metric label="Year" value={file.plex.year || "Unknown"} />
+              <Metric label="Watched" value={file.plex.watched ? "Yes" : "No"} />
+              <Metric label="Rating Key" value={file.plex.rating_key || "Unknown"} />
+              <div>
+                <strong>Collections</strong>
+                <p className="muted">{formatList(file.plex.collections)}</p>
+              </div>
+              <div>
+                <strong>Genres</strong>
+                <p className="muted">{formatList(file.plex.genres)}</p>
+              </div>
+              <div>
+                <strong>Labels</strong>
+                <p className="muted">{formatList(file.plex.labels)}</p>
+              </div>
+              <div>
+                <strong>Plex path</strong>
+                <p className="path">{file.plex.file_path}</p>
+              </div>
+              {file.plex.summary && <p>{file.plex.summary}</p>}
+            </div>
+          ) : (
+            <p className="muted">No matched Plex item for this file.</p>
+          )}
+        </Panel>
         <Panel title="Streams">
           <pre className="json">{JSON.stringify(file.streams, null, 2)}</pre>
         </Panel>
@@ -825,6 +1122,28 @@ function DetailDrawer({ file, onClose }: { file: MediaFile; onClose: () => void 
           <pre className="json">{file.raw_probe_json ? JSON.stringify(JSON.parse(file.raw_probe_json), null, 2) : "No raw probe JSON stored."}</pre>
         </Panel>
       </aside>
+    </div>
+  );
+}
+
+function PlexStatusPanel({ status }: { status?: PlexStatus }) {
+  if (!status) {
+    return <p className="muted">Plex status unavailable.</p>;
+  }
+  return (
+    <div className="statusGrid">
+      <Badge tone={status.configured ? "good" : "muted"}>{status.configured ? "Configured" : "Not configured"}</Badge>
+      <div className="scanStats">
+        <span><strong>{status.matched_count}</strong> matched</span>
+        <span><strong>{status.unmatched_file_count}</strong> unmatched files</span>
+        <span><strong>{status.unmatched_part_count}</strong> unmatched Plex parts</span>
+      </div>
+      {status.last_sync && (
+        <div className="muted">
+          Last sync #{status.last_sync.id}: {status.last_sync.status} · {formatDateTime(status.last_sync.finished_at || status.last_sync.started_at || status.last_sync.created_at)}
+        </div>
+      )}
+      {status.latest_error && <div className="muted">{status.latest_error}</div>}
     </div>
   );
 }
@@ -862,6 +1181,27 @@ function StatusBadge({ status }: { status: string }) {
 
 function Progress({ value }: { value: number }) {
   return <div className="progress"><span style={{ width: `${Math.max(0, Math.min(100, value || 0))}%` }} /></div>;
+}
+
+function plexDisplayTitle(file: MediaFile) {
+  if (!file.plex) return "Unmatched";
+  if (file.plex.show_title) {
+    const season = file.plex.season_number ?? "?";
+    const episode = file.plex.episode_number ?? "?";
+    return `${file.plex.show_title} S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")} · ${file.plex.title || file.filename}`;
+  }
+  return file.plex.title || file.filename;
+}
+
+function formatList(values?: string[]) {
+  return values?.length ? values.join(", ") : "None";
+}
+
+function plexSyncPercent(job: PlexSyncJob) {
+  if (job.total_items > 0) {
+    return Math.min(100, Math.round((job.processed_items / job.total_items) * 100));
+  }
+  return ["succeeded", "failed", "canceled"].includes(job.status) ? 100 : 0;
 }
 
 function ReportTable({ rows }: { rows: Array<{ label: string; file_count: number; total_size_bytes: number }> }) {
