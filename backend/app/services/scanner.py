@@ -18,6 +18,24 @@ class ScanManager:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
+    async def recover_startup_jobs(self) -> None:
+        db.execute(
+            """
+            UPDATE scan_jobs
+            SET status = 'interrupted',
+                finished_at = COALESCE(finished_at, ?),
+                current_path = NULL,
+                message = 'Backend restarted while this scan was active.'
+            WHERE status = 'running'
+            """,
+            (db.utc_now(),),
+        )
+        queued = db.query_one("SELECT id FROM scan_jobs WHERE status = 'queued' ORDER BY id LIMIT 1")
+        if queued:
+            async with self._lock:
+                if self._task is None or self._task.done():
+                    self._task = asyncio.create_task(self._run_scan(queued["id"]))
+
     async def start_scan(self) -> dict[str, Any]:
         async with self._lock:
             running = db.query_one("SELECT * FROM scan_jobs WHERE status IN ('queued','running') ORDER BY id LIMIT 1")
@@ -33,6 +51,34 @@ class ScanManager:
             )
             self._task = asyncio.create_task(self._run_scan(job_id))
             return db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)) or {"id": job_id}
+
+    async def retry_scan(self, job_id: int) -> dict[str, Any]:
+        scan = db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (job_id,))
+        if not scan:
+            raise ValueError("Scan not found.")
+        if scan["status"] in {"queued", "running"}:
+            return scan
+        db.execute(
+            """
+            UPDATE scan_jobs
+            SET status = 'queued',
+                started_at = NULL,
+                finished_at = NULL,
+                total_files_discovered = 0,
+                files_skipped = 0,
+                files_probed = 0,
+                files_failed = 0,
+                current_path = NULL,
+                message = 'Scan retry queued.',
+                cancel_requested = 0
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        async with self._lock:
+            if self._task is None or self._task.done():
+                self._task = asyncio.create_task(self._run_scan(job_id))
+        return db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)) or {"id": job_id}
 
     def cancel_scan(self, job_id: int) -> None:
         db.execute(

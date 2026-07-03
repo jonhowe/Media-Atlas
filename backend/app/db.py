@@ -12,6 +12,13 @@ from typing import Any
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
 
 _SCHEMA_LOCK = threading.Lock()
+_MIGRATION_STATUS: dict[str, Any] = {
+    "ok": False,
+    "applied": [],
+    "pending": [],
+    "error": "Migrations have not run yet.",
+    "last_run_at": None,
+}
 
 
 def utc_now() -> str:
@@ -74,10 +81,72 @@ def query_all(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 def init_db() -> None:
     CONFIG.database_path.parent.mkdir(parents=True, exist_ok=True)
     with _SCHEMA_LOCK:
-        with connect() as connection:
-            connection.executescript(SCHEMA)
+        run_migrations()
         seed_transcode_profiles()
         mark_running_transcodes_interrupted()
+
+
+def run_migrations() -> None:
+    global _MIGRATION_STATUS
+    now = utc_now()
+    try:
+        with connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                  version TEXT PRIMARY KEY,
+                  applied_at TEXT NOT NULL
+                )
+                """
+            )
+            applied = {
+                row["version"]
+                for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            newly_applied: list[str] = []
+            for version, script in MIGRATIONS:
+                if version in applied:
+                    continue
+                connection.executescript(script)
+                connection.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (version, utc_now()),
+                )
+                newly_applied.append(version)
+                applied.add(version)
+            pending = [version for version, _ in MIGRATIONS if version not in applied]
+        _MIGRATION_STATUS = {
+            "ok": True,
+            "applied": sorted(applied),
+            "newly_applied": newly_applied,
+            "pending": pending,
+            "error": None,
+            "last_run_at": now,
+        }
+    except Exception as exc:
+        _MIGRATION_STATUS = {
+            "ok": False,
+            "applied": [],
+            "pending": [version for version, _ in MIGRATIONS],
+            "error": str(exc),
+            "last_run_at": now,
+        }
+        raise
+
+
+def migration_status() -> dict[str, Any]:
+    return dict(_MIGRATION_STATUS)
+
+
+def create_database_backup() -> Path:
+    backup_dir = CONFIG.data_dir / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"media_inventory-{timestamp}.sqlite"
+    with sqlite3.connect(CONFIG.database_path) as source:
+        with sqlite3.connect(backup_path) as target:
+            source.backup(target)
+    return backup_path
 
 
 def seed_transcode_profiles() -> None:
@@ -507,6 +576,10 @@ CREATE INDEX IF NOT EXISTS idx_plex_file_matches_file ON plex_file_matches(file_
 CREATE INDEX IF NOT EXISTS idx_plex_file_matches_item ON plex_file_matches(plex_item_id);
 CREATE INDEX IF NOT EXISTS idx_plex_file_matches_status ON plex_file_matches(match_status);
 """
+
+MIGRATIONS: list[tuple[str, str]] = [
+    ("0001_initial_schema", SCHEMA),
+]
 
 
 def default_root_payload() -> tuple[str, str]:

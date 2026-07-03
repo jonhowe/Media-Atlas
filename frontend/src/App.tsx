@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, apiText, exportUrl } from "./api";
 import type {
+  AdminStatus,
+  AuthStatus,
   Health,
   MediaFile,
   MediaRoot,
@@ -25,6 +27,7 @@ type Page =
   | "reports"
   | "planner"
   | "runs"
+  | "status"
   | "settings";
 
 const nav: Array<[Page, string]> = [
@@ -36,12 +39,39 @@ const nav: Array<[Page, string]> = [
   ["reports", "Reports"],
   ["planner", "Transcode Planner"],
   ["runs", "Transcode Runs"],
+  ["status", "Admin Status"],
   ["settings", "Settings"]
 ];
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [toast, setToast] = useState<string>("");
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+
+  useEffect(() => {
+    refreshAuth();
+  }, []);
+
+  async function refreshAuth() {
+    try {
+      setAuth(await api<AuthStatus>("/api/auth/me"));
+    } catch {
+      setAuth({ mode: "disabled", authenticated: true, configured: true, username: "local" });
+    }
+  }
+
+  async function logout() {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+    await refreshAuth();
+  }
+
+  if (!auth) {
+    return <Splash message="Checking access" />;
+  }
+
+  if (auth.mode !== "disabled" && !auth.authenticated) {
+    return <LoginScreen auth={auth} onAuthenticated={refreshAuth} />;
+  }
 
   return (
     <div className="app">
@@ -71,7 +101,10 @@ export default function App() {
             <h1>{nav.find(([key]) => key === page)?.[1]}</h1>
             <p>Scan, understand, plan, and safely run staged media conversions.</p>
           </div>
-          {toast && <div className="toast">{toast}</div>}
+          <div className="topbarActions">
+            {toast && <div className="toast">{toast}</div>}
+            {auth.mode !== "disabled" && <button onClick={logout}>Log out</button>}
+          </div>
         </header>
         {page === "dashboard" && <Dashboard onToast={setToast} />}
         {page === "directories" && <Directories onToast={setToast} />}
@@ -81,8 +114,64 @@ export default function App() {
         {page === "reports" && <Reports />}
         {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
         {page === "runs" && <Runs onToast={setToast} />}
+        {page === "status" && <AdminStatusPage onToast={setToast} />}
         {page === "settings" && <Settings onToast={setToast} />}
       </main>
+    </div>
+  );
+}
+
+function Splash({ message }: { message: string }) {
+  return <div className="splash"><strong>Media Atlas</strong><span>{message}</span></div>;
+}
+
+function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus; onAuthenticated: () => Promise<void> }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      });
+      await onAuthenticated();
+    } catch (nextError) {
+      setError(String(nextError));
+    }
+  }
+
+  return (
+    <div className="loginShell">
+      <form className="loginPanel" onSubmit={submit}>
+        <div className="brand">
+          <span className="brandMark">MA</span>
+          <div>
+            <strong>Media Atlas</strong>
+            <small>{auth.mode === "reverse_proxy_trusted" ? "Waiting for trusted proxy identity" : "Admin sign in"}</small>
+          </div>
+        </div>
+        {auth.mode === "single_admin" ? (
+          <>
+            {!auth.configured && <Badge tone="bad">Admin password is not configured</Badge>}
+            <label>
+              Username
+              <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+            </label>
+            <label>
+              Password
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" />
+            </label>
+            <button className="primary" disabled={!auth.configured}>Sign in</button>
+          </>
+        ) : (
+          <p className="muted">The reverse proxy did not provide an authenticated user header.</p>
+        )}
+        {error && <div className="toast">{error}</div>}
+      </form>
     </div>
   );
 }
@@ -296,6 +385,12 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
     await refresh();
   }
 
+  async function retry(id: number) {
+    await api(`/api/scans/${id}/retry`, { method: "POST", body: "{}" });
+    await refresh();
+    onToast("Scan retry queued.");
+  }
+
   return (
     <section className="stack">
       <div className="toolbar">
@@ -355,7 +450,10 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
                   </td>
                   <td>{scan.message}</td>
                   <td className="path">{scan.current_path}</td>
-                  <td>{["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}</td>
+                  <td className="rowActions">
+                    {["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}
+                    {["failed", "canceled", "interrupted"].includes(scan.status) && <button onClick={() => retry(scan.id)}>Retry</button>}
+                  </td>
                 </tr>
               );
             })}
@@ -797,6 +895,136 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
+function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
+  const [status, setStatus] = useState<AdminStatus | null>(null);
+  const [stats, setStats] = useState<Record<string, any> | null>(null);
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function refresh() {
+    try {
+      const [nextStatus, nextStats] = await Promise.all([
+        api<AdminStatus>("/api/admin/status"),
+        api<Record<string, any>>("/api/admin/stats")
+      ]);
+      setStatus(nextStatus);
+      setStats(nextStats);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function runRetention() {
+    try {
+      const result = await api<Record<string, number>>("/api/admin/retention/run", { method: "POST", body: "{}" });
+      onToast(`Retention complete: ${result.logs_removed || 0} log files removed.`);
+      await refresh();
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  if (!status) {
+    return <Panel title="Admin Status"><p className="muted">Loading status.</p></Panel>;
+  }
+
+  const readiness = status.readiness;
+  return (
+    <section className="stack">
+      <div className="metrics">
+        <Metric label="Readiness" value={<StatusBadge status={readiness.status} />} />
+        <Metric label="Database" value={readiness.database.ok ? "Available" : "Unavailable"} />
+        <Metric label="Migrations" value={readiness.migrations.ok ? "OK" : "Failed"} />
+        <Metric label="Plex" value={stats?.plex?.configured ? "Configured" : "Optional"} />
+      </div>
+      {readiness.config_warnings.length > 0 && (
+        <Panel title="Config Warnings">
+          <ul>{readiness.config_warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        </Panel>
+      )}
+      <div className="grid two">
+        <Panel title="Storage">
+          <div className="statusGrid">
+            {Object.entries(status.storage).map(([key, value]) => (
+              <div className="storageRow" key={key}>
+                <strong>{key}</strong>
+                <span className="path">{value.path}</span>
+                <span>{formatBytes(value.free_bytes || 0)} free</span>
+                <Badge tone={value.ok ? "good" : "bad"}>{value.ok ? "OK" : "Low or unavailable"}</Badge>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="Tools And Paths">
+          <div className="statusGrid">
+            {Object.entries(readiness.tools).map(([key, value]) => (
+              <div className="storageRow" key={key}>
+                <strong>{key}</strong>
+                <Badge tone={value.available ? "good" : "bad"}>{value.available ? "Available" : "Missing"}</Badge>
+                <span className="muted">{value.version || value.command}</span>
+              </div>
+            ))}
+            {Object.entries(readiness.paths).map(([key, value]) => (
+              <div className="storageRow" key={key}>
+                <strong>{key}</strong>
+                <span className="path">{value.path}</span>
+                <Badge tone={value.writable ? "good" : "bad"}>{value.writable ? "Writable" : "Blocked"}</Badge>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+      <Panel title="Job State">
+        <div className="jobStateGrid">
+          {Object.entries(readiness.jobs).map(([group, counts]) => (
+            <div key={group}>
+              <strong>{group}</strong>
+              <div className="scanStats">
+                {Object.entries(counts).length ? Object.entries(counts).map(([jobStatus, count]) => (
+                  <span key={jobStatus}><strong>{count}</strong> {jobStatus}</span>
+                )) : <span className="muted">No jobs</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+      <div className="grid two">
+        <Panel title="Recent Failures">
+          <FailureList title="Scans" rows={status.recent_failures.scans} />
+          <FailureList title="Transcodes" rows={status.recent_failures.transcodes} />
+          <FailureList title="Plex Syncs" rows={status.recent_failures.plex_syncs} />
+        </Panel>
+        <Panel title="Maintenance">
+          <div className="rowActions">
+            <a className="button" href="/api/admin/database-backup">Download database backup</a>
+            <button onClick={runRetention}>Run retention cleanup</button>
+          </div>
+          <pre className="json">{JSON.stringify({ auth: status.auth, retention: status.retention, migrations: readiness.migrations }, null, 2)}</pre>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function FailureList({ title, rows }: { title: string; rows: Array<{ id: number; status: string; message?: string | null; error_message?: string | null }> }) {
+  return (
+    <div className="failureList">
+      <h3>{title}</h3>
+      {rows.length ? rows.map((row) => (
+        <div key={`${title}-${row.id}`} className="failureRow">
+          <strong>#{row.id}</strong>
+          <StatusBadge status={row.status} />
+          <span className="muted">{row.error_message || row.message || "No message"}</span>
+        </div>
+      )) : <p className="muted">No recent failures.</p>}
+    </div>
+  );
+}
+
 function Settings({ onToast }: { onToast: (message: string) => void }) {
   const [settings, setSettings] = useState<Record<string, any> | null>(null);
   const [plex, setPlex] = useState<PlexSettings | null>(null);
@@ -874,6 +1102,12 @@ function Settings({ onToast }: { onToast: (message: string) => void }) {
   async function cancelSync(jobId: number) {
     await api(`/api/plex/sync-jobs/${jobId}/cancel`, { method: "POST", body: "{}" });
     await refresh();
+  }
+
+  async function retrySync(jobId: number) {
+    await api(`/api/plex/sync-jobs/${jobId}/retry`, { method: "POST", body: "{}" });
+    await refresh();
+    onToast("Plex sync retry queued.");
   }
 
   function updatePlex(next: Partial<PlexSettings>) {
@@ -997,7 +1231,10 @@ function Settings({ onToast }: { onToast: (message: string) => void }) {
                 </td>
                 <td>{job.matched_files} matched, {job.unmatched_files} file gaps, {job.unmatched_parts} Plex gaps</td>
                 <td>{job.error_message || job.message}</td>
-                <td>{["queued", "running"].includes(job.status) && <button onClick={() => cancelSync(job.id)}>Cancel</button>}</td>
+                <td className="rowActions">
+                  {["queued", "running"].includes(job.status) && <button onClick={() => cancelSync(job.id)}>Cancel</button>}
+                  {["failed", "canceled", "interrupted"].includes(job.status) && <button onClick={() => retrySync(job.id)}>Retry</button>}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1175,7 +1412,15 @@ function Badge({ tone = "muted", children }: { tone?: string; children: ReactNod
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const tone = ["succeeded", "verified"].includes(status) ? "good" : ["failed", "error", "verification_failed"].includes(status) ? "bad" : status === "running" ? "info" : "muted";
+  const tone = ["succeeded", "verified", "ok"].includes(status)
+    ? "good"
+    : ["failed", "error", "verification_failed"].includes(status)
+      ? "bad"
+      : ["running", "queued"].includes(status)
+        ? "info"
+        : ["interrupted", "degraded"].includes(status)
+          ? "warn"
+          : "muted";
   return <Badge tone={tone}>{status}</Badge>;
 }
 

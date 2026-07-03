@@ -154,6 +154,7 @@ main {
 .topbar {
   align-items: center;
   display: flex;
+  gap: 16px;
   justify-content: space-between;
   margin-bottom: 20px;
 }
@@ -175,6 +176,38 @@ main {
   color: #ffffff;
   max-width: 420px;
   padding: 10px 12px;
+}
+
+.topbarActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.splash,
+.loginShell {
+  align-items: center;
+  background: #f6f7f9;
+  display: flex;
+  min-height: 100vh;
+  justify-content: center;
+}
+
+.splash {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loginPanel {
+  background: #ffffff;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  width: min(420px, 92vw);
 }
 
 .stack {
@@ -320,6 +353,37 @@ label {
 .compactList {
   display: grid;
   gap: 10px;
+}
+
+.storageRow,
+.failureRow {
+  align-items: center;
+  border-bottom: 1px solid #eef2f6;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(160px, 1.5fr) auto auto;
+  padding-bottom: 8px;
+}
+
+.failureRow {
+  grid-template-columns: auto auto minmax(160px, 1fr);
+}
+
+.jobStateGrid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.failureList {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.failureList h3 {
+  font-size: 14px;
+  margin: 0;
 }
 
 .checkList,
@@ -530,6 +594,9 @@ label {
   .formGrid.plexSettingsGrid,
   .mappingRow,
   .detailGrid,
+  .storageRow,
+  .failureRow,
+  .jobStateGrid,
   .toolbar {
     grid-template-columns: 1fr;
   }

@@ -29,7 +29,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS=0 \
     MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED=true \
     MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS=3 \
-    MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT=0.02
+    MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT=0.02 \
+    MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES=1073741824 \
+    MEDIA_ATLAS_AUTH_MODE=disabled \
+    MEDIA_ATLAS_LOG_RETENTION_DAYS=30 \
+    MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS=0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
@@ -48,6 +52,6 @@ RUN mkdir -p /app/data /app/reports /app/logs /app/transcode-staging /media /mnt
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/live', timeout=3).read()"
 
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

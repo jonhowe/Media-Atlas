@@ -7,6 +7,48 @@ export type Health = {
   reports_dir: string;
   logs_dir: string;
   transcode_staging_dir: string;
+  readiness?: ReadinessStatus;
+};
+
+export type ReadinessStatus = {
+  status: string;
+  ok: boolean;
+  database: { ok: boolean; path?: string; error?: string };
+  migrations: {
+    ok: boolean;
+    applied: string[];
+    pending: string[];
+    error?: string | null;
+    last_run_at?: string | null;
+  };
+  paths: Record<string, { path: string; writable: boolean; error?: string }>;
+  disk: Record<string, { path: string; ok: boolean; free_bytes?: number; min_free_bytes?: number; error?: string }>;
+  tools: Record<string, { available: boolean; version?: string | null; command?: string; path?: string }>;
+  config_warnings: string[];
+  jobs: Record<string, Record<string, number>>;
+};
+
+export type AuthStatus = {
+  mode: "disabled" | "single_admin" | "reverse_proxy_trusted";
+  authenticated: boolean;
+  username?: string | null;
+  configured: boolean;
+  trusted_user_header?: string | null;
+};
+
+export type AdminStatus = {
+  readiness: ReadinessStatus;
+  auth: Record<string, unknown>;
+  storage: Record<string, { path: string; ok: boolean; free_bytes?: number; total_bytes?: number; used_bytes?: number; error?: string }>;
+  recent_failures: {
+    scans: ScanJob[];
+    transcodes: TranscodeRun[];
+    plex_syncs: PlexSyncJob[];
+  };
+  retention: {
+    log_retention_days: number;
+    staged_output_retention_days: number;
+  };
 };
 
 export type MediaRoot = {

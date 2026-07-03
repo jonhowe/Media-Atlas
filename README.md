@@ -2,7 +2,7 @@
 
 Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs without modifying source media.
 
-The MVP never deletes, overwrites, replaces, or automatically mutates source media.
+Media Atlas never deletes, overwrites, replaces, or automatically mutates source media in the current production path. Transcode output is staged separately from originals.
 
 ## Capabilities
 
@@ -20,6 +20,8 @@ The MVP never deletes, overwrites, replaces, or automatically mutates source med
 
 Recommended install uses the published GHCR image. The host only needs Docker Compose and access to a local or mounted media directory.
 
+For production, prefer a pinned release tag once one is available. `latest` is convenient for first installs and quick updates, but pinned tags make rollback straightforward.
+
 Create an install directory:
 
 ```bash
@@ -31,8 +33,13 @@ Create `.env`:
 
 ```bash
 MEDIA_ATLAS_PORT=8000
+MEDIA_ATLAS_IMAGE=ghcr.io/jonhowe/media-atlas:latest
 MEDIA_ATLAS_MEDIA_ROOT=/mnt/media
 MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS=/media
+MEDIA_ATLAS_AUTH_MODE=single_admin
+MEDIA_ATLAS_ADMIN_USERNAME=admin
+MEDIA_ATLAS_ADMIN_PASSWORD=replace-this-password
+MEDIA_ATLAS_SESSION_SECRET=replace-this-with-a-long-random-secret
 ```
 
 Create `docker-compose.yml`:
@@ -40,7 +47,7 @@ Create `docker-compose.yml`:
 ```yaml
 services:
   media-atlas:
-    image: ghcr.io/jonhowe/media-atlas:latest
+    image: ${MEDIA_ATLAS_IMAGE:-ghcr.io/jonhowe/media-atlas:latest}
     container_name: media-atlas
     restart: unless-stopped
     ports:
@@ -60,6 +67,16 @@ services:
       MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED: "${MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED:-true}"
       MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS: "${MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS:-3}"
       MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT: "${MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT:-0.02}"
+      MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES: "${MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES:-1073741824}"
+      MEDIA_ATLAS_AUTH_MODE: "${MEDIA_ATLAS_AUTH_MODE:-single_admin}"
+      MEDIA_ATLAS_ADMIN_USERNAME: "${MEDIA_ATLAS_ADMIN_USERNAME:-admin}"
+      MEDIA_ATLAS_ADMIN_PASSWORD: "${MEDIA_ATLAS_ADMIN_PASSWORD:-}"
+      MEDIA_ATLAS_SESSION_SECRET: "${MEDIA_ATLAS_SESSION_SECRET:-}"
+      MEDIA_ATLAS_SESSION_COOKIE_SECURE: "${MEDIA_ATLAS_SESSION_COOKIE_SECURE:-false}"
+      MEDIA_ATLAS_ALLOWED_ORIGINS: "${MEDIA_ATLAS_ALLOWED_ORIGINS:-http://127.0.0.1:8000,http://localhost:8000}"
+      MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN: "${MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN:-false}"
+      MEDIA_ATLAS_LOG_RETENTION_DAYS: "${MEDIA_ATLAS_LOG_RETENTION_DAYS:-30}"
+      MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS: "${MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS:-0}"
       MEDIA_ATLAS_PLEX_URL: "${MEDIA_ATLAS_PLEX_URL:-}"
       MEDIA_ATLAS_PLEX_TOKEN: "${MEDIA_ATLAS_PLEX_TOKEN:-}"
     volumes:
@@ -93,6 +110,12 @@ docker compose restart media-atlas
 docker compose down
 ```
 
+Generate a stronger session secret with:
+
+```bash
+openssl rand -hex 32
+```
+
 ## Paths And Volumes
 
 The container sees your host media root at `/media`.
@@ -123,6 +146,7 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 
 | Variable | Belongs in | Required | Default | Purpose |
 | --- | --- | --- | --- | --- |
+| `MEDIA_ATLAS_IMAGE` | `.env` | No | `ghcr.io/jonhowe/media-atlas:latest` | Image tag to run. Use a release tag for production when available. |
 | `MEDIA_ATLAS_PORT` | `.env` | No | `8000` | Host port mapped to container port `8000`. |
 | `MEDIA_ATLAS_MEDIA_ROOT` | `.env` | Yes | none | Host media path mounted read-only at `/media`. |
 | `MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT` | `.env` plus a custom Compose volume line | No | none | Optional host path if you choose to mount staged outputs somewhere other than `./transcode-staging`. |
@@ -150,10 +174,100 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 | `MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS` | `.env` via `docker-compose.yml`; optional local env var | `0` | `0` | Global `ffmpeg` timeout. `0` means no timeout. |
 | `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS` | `.env` via `docker-compose.yml`; optional local env var | `3` | `3` | Minimum duration tolerance for output verification. |
 | `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT` | `.env` via `docker-compose.yml`; optional local env var | `0.02` | `0.02` | Percent duration tolerance for output verification. |
+| `MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES` | `.env` via `docker-compose.yml`; optional local env var | `1073741824` | `1073741824` | Minimum free bytes required on the staging filesystem before starting an item. |
+| `MEDIA_ATLAS_AUTH_MODE` | `.env` via `docker-compose.yml`; optional local env var | `single_admin` | `disabled` | Access mode: `disabled`, `single_admin`, or `reverse_proxy_trusted`. |
+| `MEDIA_ATLAS_ADMIN_USERNAME` | `.env` via `docker-compose.yml`; optional local env var | `admin` | `admin` | Username for `single_admin` mode. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD` | `.env` via `docker-compose.yml`; optional local env var | empty | empty | Password for `single_admin` mode. Required when that mode is enabled. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` | Optional env var | empty | empty | Optional PBKDF2 password hash in `pbkdf2_sha256$iterations$salt$hash` format. |
+| `MEDIA_ATLAS_SESSION_SECRET` | `.env` via `docker-compose.yml`; optional local env var | empty | empty | HMAC secret for signed admin session cookies. Set a long random value in production. |
+| `MEDIA_ATLAS_SESSION_TTL_SECONDS` | Optional env var | `43200` | `43200` | Admin session lifetime. Minimum is `300`. |
+| `MEDIA_ATLAS_SESSION_COOKIE_SECURE` | `.env` via `docker-compose.yml`; optional local env var | `false` | `false` | Set `true` when serving Media Atlas over HTTPS. |
+| `MEDIA_ATLAS_TRUSTED_USER_HEADER` | Optional env var | `X-Forwarded-User` | `X-Forwarded-User` | Header trusted in `reverse_proxy_trusted` auth mode. Only use behind a trusted proxy that strips client-supplied values. |
+| `MEDIA_ATLAS_ALLOWED_ORIGINS` | `.env` via `docker-compose.yml`; optional local env var | loopback origins | loopback origins | Comma-separated CORS origins for browser clients. Same-origin production installs usually need no extra origins. |
+| `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN` | `.env` via `docker-compose.yml`; optional local env var | `false` | `false` | Explicit acknowledgement for binding `0.0.0.0` with auth disabled on a trusted LAN/VPN. |
+| `MEDIA_ATLAS_FAIL_UNSAFE_BIND` | Optional env var | `false` | `false` | If `true`, startup fails instead of only warning for unsafe all-interface/no-auth config. |
+| `MEDIA_ATLAS_READINESS_MIN_FREE_BYTES` | Optional env var | `268435456` | `268435456` | Minimum free bytes required for readiness disk checks. |
+| `MEDIA_ATLAS_LOG_RETENTION_DAYS` | `.env` via `docker-compose.yml`; optional local env var | `30` | `30` | Deletes old app/transcode log files during retention cleanup. |
+| `MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS` | `.env` via `docker-compose.yml`; optional local env var | `0` | `0` | Deletes old quarantined partial retry outputs when greater than `0`; completed staged outputs are not removed automatically. |
 | `MEDIA_ATLAS_PLEX_URL` | Optional `.env` via `docker-compose.yml`; optional local env var | empty | empty | Optional default Plex server URL. Can also be configured in Settings. |
 | `MEDIA_ATLAS_PLEX_TOKEN` | Optional `.env` via `docker-compose.yml`; optional local env var | empty | empty | Optional default Plex token. Can also be configured in Settings; never returned in full by the API. |
 
 Plex path mappings are configured in the Settings page, not by environment variable. In Docker, map Plex paths to container paths, for example `/mnt/media` to `/media`.
+
+## Operations
+
+Health endpoints:
+
+```text
+/api/health/live    process liveness
+/api/health/ready   database, migrations, writable paths, disk, tools, Plex summary, and config warnings
+/api/admin/status   UI-facing admin status payload
+/api/admin/stats    lightweight JSON stats for monitoring integrations
+```
+
+Readiness returns HTTP `503` when required checks fail. The Docker healthcheck uses liveness so the container can stay up while readiness explains what needs attention.
+
+### Access Modes
+
+- `disabled`: no login. Safe for local loopback development. If bound to `0.0.0.0`, readiness warns unless `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN=true`.
+- `single_admin`: built-in admin login with signed HttpOnly session cookies. Recommended for LAN/VPN Compose installs.
+- `reverse_proxy_trusted`: Media Atlas trusts `MEDIA_ATLAS_TRUSTED_USER_HEADER`. Use only behind a reverse proxy that authenticates users and strips client-supplied identity headers.
+
+### Backups
+
+Create a safe SQLite backup from the host:
+
+```bash
+docker compose exec media-atlas python - <<'PY'
+from app import db
+print(db.create_database_backup())
+PY
+```
+
+You can also download a backup from the Admin Status page. Backups are written under `./data/backups`.
+
+To restore, stop the app, copy the backup over `./data/media_inventory.sqlite`, keep the old file until you have verified startup, then start the app:
+
+```bash
+docker compose down
+cp ./data/media_inventory.sqlite ./data/media_inventory.sqlite.before-restore
+cp ./data/backups/media_inventory-YYYYMMDDTHHMMSSZ.sqlite ./data/media_inventory.sqlite
+docker compose up -d
+docker compose logs -f media-atlas
+```
+
+### Upgrade And Rollback
+
+Upgrade:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+If you pin `MEDIA_ATLAS_IMAGE`, change it to the desired release tag before pulling. Database migrations run on startup and are reported in readiness and Admin Status.
+
+Rollback:
+
+```bash
+# Edit .env and set:
+# MEDIA_ATLAS_IMAGE=ghcr.io/jonhowe/media-atlas:<previous-tag>
+docker compose pull
+docker compose up -d
+```
+
+If the newer version ran migrations, restore the database backup created before the upgrade before rolling back.
+
+### LAN/VPN Reverse Proxy
+
+For a trusted LAN/VPN reverse proxy, terminate HTTPS at the proxy and forward to `http://media-atlas:8000`. Set:
+
+```text
+MEDIA_ATLAS_SESSION_COOKIE_SECURE=true
+MEDIA_ATLAS_ALLOWED_ORIGINS=https://media-atlas.example.internal
+```
+
+If the proxy provides authentication, use `MEDIA_ATLAS_AUTH_MODE=reverse_proxy_trusted` and configure `MEDIA_ATLAS_TRUSTED_USER_HEADER`. The proxy must remove any incoming user identity header from clients before adding its own.
 
 ## Development Install
 

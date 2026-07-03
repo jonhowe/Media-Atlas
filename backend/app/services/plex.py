@@ -99,6 +99,23 @@ class PlexSyncManager:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
+    async def recover_startup_jobs(self) -> None:
+        db.execute(
+            """
+            UPDATE plex_sync_jobs
+            SET status = 'interrupted',
+                finished_at = COALESCE(finished_at, ?),
+                message = 'Backend restarted while this Plex sync was active.'
+            WHERE status = 'running'
+            """,
+            (db.utc_now(),),
+        )
+        queued = db.query_one("SELECT id FROM plex_sync_jobs WHERE status = 'queued' ORDER BY id LIMIT 1")
+        if queued:
+            async with self._lock:
+                if self._task is None or self._task.done():
+                    self._task = asyncio.create_task(self._run_sync(queued["id"]))
+
     async def test_connection(self) -> dict[str, Any]:
         client = PlexClient(get_settings(include_secret=True))
         libraries = await client.libraries()
@@ -163,6 +180,12 @@ class PlexSyncManager:
             )
             self._task = asyncio.create_task(self._run_sync(job_id))
             return read_sync_job(job_id) or {"id": job_id}
+
+    async def retry_sync(self, job_id: int) -> dict[str, Any]:
+        existing = read_sync_job(job_id)
+        if not existing:
+            raise PlexError("Plex sync job not found.")
+        return await self.start_sync()
 
     def cancel_sync(self, job_id: int) -> None:
         db.execute(

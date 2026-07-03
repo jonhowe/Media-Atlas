@@ -4,19 +4,31 @@ import asyncio
 import csv
 import io
 import json
+import logging
 import os
-import shutil
+import secrets
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
+from .health import admin_status, live_status, metrics_status, readiness_status
+from .logging_config import configure_logging
+from .security import (
+    auth_status,
+    clear_session_cookie,
+    login,
+    require_auth_response,
+    security_headers,
+    set_session_cookie,
+)
 from .services.paths import is_within_allowed_browse_roots, resolve_existing_directory
 from .services.plex import (
     PlexError,
@@ -32,18 +44,17 @@ from .services.plex import (
     stored_libraries as stored_plex_libraries,
     unmatched as plex_unmatched,
 )
+from .services.retention import apply_retention
 from .services.scanner import ScanManager
 from .services.transcodes import TranscodeManager, create_plan, get_plan
+
+configure_logging()
+logger = logging.getLogger("media_atlas.requests")
 
 app = FastAPI(title="Media Atlas", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-    ],
+    allow_origins=CONFIG.operations.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,6 +93,11 @@ class RunCreate(BaseModel):
     name: str | None = Field(default=None, max_length=180)
 
 
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
 class PlexPathMapping(BaseModel):
     plex_path_prefix: str = ""
     media_atlas_path_prefix: str = ""
@@ -97,31 +113,87 @@ class PlexSettingsUpdate(BaseModel):
     path_mappings: list[PlexPathMapping] | None = None
 
 
+@app.middleware("http")
+async def request_security_middleware(request: Request, call_next: Any) -> Response:
+    request_id = request.headers.get("X-Request-ID") or secrets.token_hex(8)
+    started = time.perf_counter()
+    response: Response | None = require_auth_response(request)
+    if response is None:
+        response = await call_next(request)
+    security_headers(response)
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request complete",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        },
+    )
+    return response
+
+
 @app.on_event("startup")
 async def startup() -> None:
     db.init_db()
-    await transcode_manager.ensure_worker()
+    for warning in CONFIG.config_warnings:
+        logging.getLogger("media_atlas.config").warning(warning)
+    apply_retention()
+    await scan_manager.recover_startup_jobs()
+    await plex_manager.recover_startup_jobs()
+    await transcode_manager.recover_startup_jobs()
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    database_available = False
-    try:
-        database_available = bool(db.query_one("SELECT 1 AS ok"))
-    except Exception:
-        database_available = False
-    ffprobe_available = shutil.which(CONFIG.scanner.ffprobe_path) is not None
-    ffmpeg_available = shutil.which(CONFIG.transcoder.ffmpeg_path) is not None
+    status = readiness_status()
     return {
-        "status": "ok" if database_available else "degraded",
-        "database_available": database_available,
-        "ffprobe_available": ffprobe_available,
-        "ffmpeg_available": ffmpeg_available,
+        "status": status["status"],
+        "database_available": status["database"]["ok"],
+        "ffprobe_available": status["tools"]["ffprobe"]["available"],
+        "ffmpeg_available": status["tools"]["ffmpeg"]["available"],
         "data_dir": str(CONFIG.data_dir),
         "reports_dir": str(CONFIG.reports_dir),
         "logs_dir": str(CONFIG.logs_dir),
         "transcode_staging_dir": str(CONFIG.transcoder.staging_dir),
+        "readiness": status,
     }
+
+
+@app.get("/api/health/live")
+async def health_live() -> dict[str, Any]:
+    return live_status()
+
+
+@app.get("/api/health/ready")
+async def health_ready() -> Response:
+    status = readiness_status()
+    return JSONResponse(status, status_code=200 if status["ok"] else 503)
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> dict[str, Any]:
+    return auth_status(request)
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: LoginRequest) -> Response:
+    try:
+        session = login(payload.username, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    response = JSONResponse({"authenticated": True, "username": payload.username})
+    set_session_cookie(response, session)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout() -> Response:
+    response = JSONResponse({"authenticated": False})
+    clear_session_cookie(response)
+    return response
 
 
 @app.get("/api/settings")
@@ -138,7 +210,46 @@ async def settings() -> dict[str, Any]:
         "allowed_browse_roots": [str(path) for path in CONFIG.allowed_browse_roots],
         "default_extensions": DEFAULT_EXTENSIONS,
         "default_excludes": DEFAULT_EXCLUDES,
+        "auth": {
+            "mode": CONFIG.auth.mode,
+            "admin_username": CONFIG.auth.admin_username if CONFIG.auth.mode == "single_admin" else None,
+            "admin_password_configured": bool(CONFIG.auth.admin_password or CONFIG.auth.admin_password_hash),
+            "session_secret_configured": bool(CONFIG.auth.session_secret),
+            "cookie_secure": CONFIG.auth.cookie_secure,
+        },
+        "operations": {
+            "allowed_origins": CONFIG.operations.allowed_origins,
+            "readiness_min_free_bytes": CONFIG.operations.readiness_min_free_bytes,
+            "log_retention_days": CONFIG.operations.log_retention_days,
+            "staged_output_retention_days": CONFIG.operations.staged_output_retention_days,
+        },
+        "config_warnings": CONFIG.config_warnings,
     }
+
+
+@app.get("/api/admin/status")
+async def get_admin_status() -> dict[str, Any]:
+    return admin_status()
+
+
+@app.get("/api/admin/stats")
+async def get_admin_stats() -> dict[str, Any]:
+    return metrics_status()
+
+
+@app.get("/api/admin/database-backup")
+async def download_database_backup() -> FileResponse:
+    backup_path = db.create_database_backup()
+    return FileResponse(
+        backup_path,
+        media_type="application/vnd.sqlite3",
+        filename=backup_path.name,
+    )
+
+
+@app.post("/api/admin/retention/run")
+async def run_retention() -> dict[str, Any]:
+    return apply_retention()
 
 
 @app.get("/api/plex/settings")
@@ -216,6 +327,14 @@ async def plex_sync_events(job_id: int) -> StreamingResponse:
 async def cancel_plex_sync(job_id: int) -> dict[str, Any]:
     plex_manager.cancel_sync(job_id)
     return await get_plex_sync_job(job_id)
+
+
+@app.post("/api/plex/sync-jobs/{job_id}/retry")
+async def retry_plex_sync(job_id: int) -> dict[str, Any]:
+    try:
+        return await plex_manager.retry_sync(job_id)
+    except PlexError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/plex/unmatched")
@@ -354,6 +473,14 @@ async def get_scan(scan_id: int) -> dict[str, Any]:
 async def cancel_scan(scan_id: int) -> dict[str, Any]:
     scan_manager.cancel_scan(scan_id)
     return db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,)) or {"id": scan_id}
+
+
+@app.post("/api/scans/{scan_id}/retry")
+async def retry_scan(scan_id: int) -> dict[str, Any]:
+    try:
+        return await scan_manager.retry_scan(scan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/scans/{scan_id}/events")

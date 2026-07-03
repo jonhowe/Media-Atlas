@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,20 @@ class TranscodeManager:
         async with self._lock:
             if self._worker_task is None or self._worker_task.done():
                 self._worker_task = asyncio.create_task(self._worker_loop())
+
+    async def recover_startup_jobs(self) -> None:
+        db.mark_running_transcodes_interrupted()
+        queued = db.query_one(
+            """
+            SELECT id
+            FROM transcode_run_items
+            WHERE status = 'queued'
+            ORDER BY id
+            LIMIT 1
+            """
+        )
+        if queued:
+            await self.ensure_worker()
 
     async def create_run(self, plan_id: int, name: str | None = None) -> dict[str, Any]:
         plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
@@ -87,6 +103,16 @@ class TranscodeManager:
 
     async def retry_run(self, run_id: int) -> dict[str, Any]:
         now = db.utc_now()
+        retryable_items = db.query_all(
+            """
+            SELECT *
+            FROM transcode_run_items
+            WHERE run_id = ? AND status IN ('failed', 'interrupted', 'verification_failed', 'canceled')
+            """,
+            (run_id,),
+        )
+        for item in retryable_items:
+            self._quarantine_target(item)
         db.execute(
             """
             UPDATE transcode_run_items
@@ -162,7 +188,14 @@ class TranscodeManager:
         command = json.loads(item["command_json"])
         duration = item.get("duration_seconds") or self._source_duration(item["file_id"])
         try:
-            Path(item["target_path"]).parent.mkdir(parents=True, exist_ok=True)
+            preflight_errors = self._preflight_item(item, command)
+            if preflight_errors:
+                with log_path.open("a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{now}] Preflight failed:\n")
+                    for error in preflight_errors:
+                        log_file.write(f"- {error}\n")
+                self._finish_item(item["id"], "failed", None, "not_run", "; ".join(preflight_errors))
+                return
             with log_path.open("a", encoding="utf-8") as log_file:
                 log_file.write(f"[{now}] {safe_shell_join(command)}\n\n")
                 exit_code = await self._execute_ffmpeg(item, command, log_file, duration)
@@ -258,6 +291,47 @@ class TranscodeManager:
         item = db.query_one("SELECT run_id FROM transcode_run_items WHERE id = ?", (item_id,))
         if item:
             self._refresh_run_progress(item["run_id"])
+
+    def _preflight_item(self, item: dict[str, Any], command: list[Any]) -> list[str]:
+        errors: list[str] = []
+        source = Path(item["source_path"])
+        target = Path(item["target_path"])
+        if not isinstance(command, list) or not command or any(not isinstance(part, str) for part in command):
+            errors.append("Stored transcode command is invalid.")
+            return errors
+        if command[0] != CONFIG.transcoder.ffmpeg_path:
+            errors.append("Stored command does not use the configured ffmpeg executable.")
+        if item["source_path"] not in command:
+            errors.append("Stored command does not reference the expected source path.")
+        if command[-1] != item["target_path"]:
+            errors.append("Stored command does not write to the expected staged target path.")
+        if not source.exists() or not source.is_file():
+            errors.append("Source file is missing.")
+        elif not os.access(source, os.R_OK):
+            errors.append("Source file is not readable.")
+        target_within_staging = _is_within(target, CONFIG.transcoder.staging_dir)
+        if not target_within_staging:
+            errors.append("Target path is outside the configured transcode staging directory.")
+        if target.exists():
+            errors.append("Target path already exists; retry will not overwrite staged outputs.")
+        if target_within_staging:
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                errors.append(f"Could not create target directory: {exc}")
+            if not os.access(target.parent, os.W_OK):
+                errors.append("Target directory is not writable.")
+            try:
+                usage = shutil.disk_usage(target.parent)
+                source_size = source.stat().st_size if source.exists() else 0
+                required = max(CONFIG.transcoder.min_free_bytes, min(source_size, CONFIG.transcoder.min_free_bytes * 4))
+                if usage.free < required:
+                    errors.append(
+                        f"Transcode staging filesystem has {usage.free} bytes free; at least {required} bytes are required."
+                    )
+            except OSError as exc:
+                errors.append(f"Could not check free disk space: {exc}")
+        return errors
 
     def _refresh_run_progress(self, run_id: int) -> None:
         rows = db.query_all("SELECT progress_percent FROM transcode_run_items WHERE run_id = ?", (run_id,))
@@ -371,6 +445,24 @@ class TranscodeManager:
     def _is_run_cancel_requested(self, run_id: int) -> bool:
         row = db.query_one("SELECT cancel_requested FROM transcode_runs WHERE id = ?", (run_id,))
         return bool(row and row["cancel_requested"])
+
+    def _quarantine_target(self, item: dict[str, Any]) -> None:
+        target = Path(item["target_path"])
+        if not target.exists() or not _is_within(target, CONFIG.transcoder.staging_dir):
+            return
+        quarantine_dir = CONFIG.transcoder.staging_dir / ".quarantine" / f"run-{item['run_id']}"
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        suffix = db.utc_now().replace(":", "").replace("+", "Z")
+        destination = quarantine_dir / f"item-{item['id']}-{target.name}.{suffix}.partial"
+        target.replace(destination)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(root.expanduser().resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def build_command(profile: dict[str, Any], source_path: str, target_path: str) -> list[str] | None:
