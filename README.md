@@ -138,6 +138,50 @@ Persistent app data is bind-mounted into the install directory:
 
 Source media is mounted read-only. Staged transcode output is written separately.
 
+## Transcode Profiles
+
+Media Atlas generates only app-defined `ffmpeg` commands. The production image includes several staged-output profiles:
+
+| Profile | Encoder | Relative speed | Use case |
+| --- | --- | --- | --- |
+| Remux to MKV | stream copy | Very fast | Container changes without re-encoding. |
+| HEVC Archive Balanced | `libx265 -crf 20 -preset medium` | Slow | Maximum compression and quality. |
+| HEVC Archive Fast | `libx265 -crf 21 -preset fast` | Medium | Recommended default for most archival conversions. |
+| HEVC Archive Faster | `libx265 -crf 22 -preset faster` | Fast | Bulk conversions where larger outputs are acceptable. |
+| HEVC Quick Sync | `hevc_qsv -global_quality 24` | Very fast | Intel iGPU/Quick Sync hosts. |
+| HEVC NVENC | `hevc_nvenc -cq 24 -preset p5` | Very fast | NVIDIA GPU hosts. |
+| HEVC VAAPI | `hevc_vaapi -qp 24` | Very fast | Linux VAAPI hosts, usually Intel or AMD. |
+| H.264 Compatibility | `libx264 -crf 20 -preset slow` | Medium | MP4 compatibility outputs. |
+
+The hardware profiles are optional. They remain visible because the same image can run on different hosts, but they will fail preflight or `ffmpeg` execution if the container does not have access to the required device/driver stack.
+
+For VAAPI or Intel Quick Sync on Linux, add device access to `docker-compose.yml`:
+
+```yaml
+services:
+  media-atlas:
+    devices:
+      - /dev/dri:/dev/dri
+```
+
+For NVIDIA NVENC, install the NVIDIA Container Toolkit on the host and add:
+
+```yaml
+services:
+  media-atlas:
+    gpus: all
+```
+
+Useful CPU checks:
+
+```bash
+docker stats media-atlas
+docker exec -it media-atlas nproc
+docker inspect media-atlas
+```
+
+If `libx265` logs messages such as `No thread pool allocated`, check container CPU limits first. If the container sees the expected CPUs and x265 still underutilizes the host, compare the Fast and Faster profiles before adding encoder-specific threading parameters.
+
 ## Configuration Reference
 
 Configuration is environment-variable based. In Docker, variables in `.env` are consumed by `docker-compose.yml`; only variables listed under `environment` are passed into the container.

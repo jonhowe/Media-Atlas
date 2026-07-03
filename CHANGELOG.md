@@ -13,5 +13,5 @@ All notable Media Atlas changes should be recorded here.
 - Added interrupted-job retry actions and transcode preflight checks.
 - Added quarantine-on-retry for partial staged transcode outputs.
 - Added conservative retention controls for logs and quarantined partial outputs.
+- Added faster HEVC software profiles and optional Quick Sync, NVENC, and VAAPI hardware profiles.
 - Added backend migration smoke tests and CI gates before container publish.
-

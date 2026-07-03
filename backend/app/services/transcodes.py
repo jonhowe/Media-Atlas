@@ -305,6 +305,8 @@ class TranscodeManager:
             errors.append("Stored command does not reference the expected source path.")
         if command[-1] != item["target_path"]:
             errors.append("Stored command does not write to the expected staged target path.")
+        if ("hevc_qsv" in command or "hevc_vaapi" in command) and not Path("/dev/dri/renderD128").exists():
+            errors.append("Hardware encoder requires /dev/dri/renderD128 inside the container.")
         if not source.exists() or not source.is_file():
             errors.append("Source file is missing.")
         elif not os.access(source, os.R_OK):
@@ -473,6 +475,12 @@ def build_command(profile: dict[str, Any], source_path: str, target_path: str) -
     if template == "remux_mkv":
         return [ffmpeg, "-n", "-i", source_path, "-map", "0", "-c", "copy", target_path]
     if template == "hevc_archive":
+        return _hevc_software_command(ffmpeg, source_path, target_path, crf="20", preset="medium")
+    if template == "hevc_archive_fast":
+        return _hevc_software_command(ffmpeg, source_path, target_path, crf="21", preset="fast")
+    if template == "hevc_archive_faster":
+        return _hevc_software_command(ffmpeg, source_path, target_path, crf="22", preset="faster")
+    if template == "hevc_qsv":
         return [
             ffmpeg,
             "-n",
@@ -481,11 +489,51 @@ def build_command(profile: dict[str, Any], source_path: str, target_path: str) -
             "-map",
             "0",
             "-c:v",
-            "libx265",
-            "-crf",
-            "20",
+            "hevc_qsv",
+            "-global_quality",
+            "24",
+            "-c:a",
+            "copy",
+            "-c:s",
+            "copy",
+            target_path,
+        ]
+    if template == "hevc_nvenc":
+        return [
+            ffmpeg,
+            "-n",
+            "-i",
+            source_path,
+            "-map",
+            "0",
+            "-c:v",
+            "hevc_nvenc",
+            "-cq",
+            "24",
             "-preset",
-            "medium",
+            "p5",
+            "-c:a",
+            "copy",
+            "-c:s",
+            "copy",
+            target_path,
+        ]
+    if template == "hevc_vaapi":
+        return [
+            ffmpeg,
+            "-n",
+            "-vaapi_device",
+            "/dev/dri/renderD128",
+            "-i",
+            source_path,
+            "-map",
+            "0",
+            "-vf",
+            "format=nv12,hwupload",
+            "-c:v",
+            "hevc_vaapi",
+            "-qp",
+            "24",
             "-c:a",
             "copy",
             "-c:s",
@@ -515,6 +563,35 @@ def build_command(profile: dict[str, Any], source_path: str, target_path: str) -
             target_path,
         ]
     return None
+
+
+def _hevc_software_command(
+    ffmpeg: str,
+    source_path: str,
+    target_path: str,
+    *,
+    crf: str,
+    preset: str,
+) -> list[str]:
+    return [
+        ffmpeg,
+        "-n",
+        "-i",
+        source_path,
+        "-map",
+        "0",
+        "-c:v",
+        "libx265",
+        "-crf",
+        crf,
+        "-preset",
+        preset,
+        "-c:a",
+        "copy",
+        "-c:s",
+        "copy",
+        target_path,
+    ]
 
 
 def plan_target_path(file_row: dict[str, Any], profile: dict[str, Any]) -> str:

@@ -683,7 +683,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
     setProfiles(nextProfiles);
     setPlans(nextPlans);
     setFiles(candidates.items);
-    setProfileId((current) => current || nextProfiles.find((profile) => profile.command_template !== "manual_review")?.id || 0);
+    setProfileId((current) => current || defaultProfileId(nextProfiles));
   }
 
   function toggleFile(id: number) {
@@ -735,6 +735,9 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
           </label>
           <button disabled={!selected.size || !profileId} onClick={create}>Create plan</button>
         </div>
+        {selectedProfile(profiles, profileId)?.description && (
+          <p className="muted">{selectedProfile(profiles, profileId)?.description}</p>
+        )}
         <table>
           <thead>
             <tr>
@@ -788,6 +791,16 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
       </Panel>
     </section>
   );
+}
+
+function defaultProfileId(profiles: TranscodeProfile[]) {
+  return profiles.find((profile) => profile.command_template === "hevc_archive_fast")?.id
+    || profiles.find((profile) => profile.command_template !== "manual_review")?.id
+    || 0;
+}
+
+function selectedProfile(profiles: TranscodeProfile[], profileId: number) {
+  return profiles.find((profile) => profile.id === profileId);
 }
 
 function Runs({ onToast }: { onToast: (message: string) => void }) {
