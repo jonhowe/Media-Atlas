@@ -4,18 +4,48 @@ This changelog summarizes the commits currently on `main`. New user-facing chang
 
 ## Unreleased
 
-- Added transcode plan archive/unarchive actions.
-- Added guarded transcode plan deletion for plans that have never been run.
-- Hid archived transcode plans from the default planner view with a toggle to show archived plans.
-- Changed GHCR publishing to run only for published GitHub Releases.
-- Added a two-confirmation publish action for verified staged transcode outputs with original-file backup.
-- Moved manual publish backups into dedicated transcode backup storage beside transcode staging.
-- Added publish status, step, percent, byte, timing, and backup-path details to transcode run items.
-- Added a persisted light/dark theme toggle for the web UI.
+- No unreleased changes.
 
 ## Main Branch History
 
 ### 2026-07-06
+
+#### `63bdf7d` (`v0.4`) - Add publish progress details and theme toggle
+
+- Added publish status, step, percent, byte, timing, and backup-path details to transcode run items.
+- Added interrupted publish recovery so active publishes do not appear stuck after backend restart.
+- Added a persisted light/dark theme toggle for the web UI.
+- Converted the web UI styling to theme variables for light and dark palettes.
+
+#### `21fef3c` (`v0.3`) - Add transcode backup directory support
+
+- Added configurable transcode backup storage with `MEDIA_ATLAS_TRANSCODE_BACKUP_DIR`.
+- Added `/app/transcode-backups` and `./transcode-backups` Compose defaults.
+- Moved manual publish backups out of source media directories and into backup storage grouped by run/item.
+- Added backup directory health/readiness reporting and settings exposure.
+- Updated publish prompts and documentation to describe dedicated backup storage.
+
+#### `f113c0a` (`v0.2`) - Add manual transcode publish action
+
+- Added a two-confirmation publish action for verified staged transcode outputs.
+- Added backend publish validation for exact source path, staged target path, verification status, duplicate publish state, and confirmation text.
+- Added original-file backup recording on transcode run items.
+- Added Transcode Runs UI actions and status display for published outputs.
+- Updated README safety guidance for manual source replacement.
+
+#### `94b5912` - Use release-only GHCR publishing
+
+- Changed GHCR publishing to run only when a GitHub Release is published.
+- Removed push and manual dispatch publishing paths from the GHCR workflow.
+- Kept Docker build checks for pushes and PRs without pushing images.
+- Updated README publishing guidance so `latest` tracks the latest published GitHub Release.
+
+#### `d2b6150` - Add transcode plan archive and delete actions
+
+- Added transcode plan archive and unarchive API actions.
+- Added guarded transcode plan deletion for plans that have never been run.
+- Hid archived transcode plans from the default planner view.
+- Added a planner toggle to show archived plans and manage archived state.
 
 #### `79b1907` - Enhance transcode plans API and app branding
 
