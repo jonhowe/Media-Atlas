@@ -1,3 +1,5 @@
+![Media Atlas banner](docs/assets/media-atlas-banner.png)
+
 # Media Atlas
 
 Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs without modifying source media.
