@@ -683,15 +683,42 @@ async def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
 
 @app.get("/api/transcode-plans")
 async def list_transcode_plans() -> list[dict[str, Any]]:
-    return db.query_all(
+    plans = db.query_all(
         """
         SELECT tp.*, p.name AS profile_name,
-               (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id) AS item_count
+               (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id) AS item_count,
+               (SELECT COUNT(*) FROM transcode_runs WHERE plan_id = tp.id) AS run_count
         FROM transcode_plans tp
         LEFT JOIN transcode_profiles p ON p.id = tp.profile_id
         ORDER BY tp.id DESC
         """
     )
+    for plan in plans:
+        plan["sample_items"] = db.query_all(
+            """
+            SELECT tpi.id, tpi.file_id, tpi.source_path, tpi.target_path, tpi.action,
+                   tpi.reason, f.filename
+            FROM transcode_plan_items tpi
+            LEFT JOIN files f ON f.id = tpi.file_id
+            WHERE tpi.plan_id = ?
+            ORDER BY tpi.id
+            LIMIT 6
+            """,
+            (plan["id"],),
+        )
+        plan["latest_run"] = db.query_one(
+            """
+            SELECT id, name, status, created_at, started_at, finished_at,
+                   total_items, completed_items, failed_items, canceled_items,
+                   progress_percent
+            FROM transcode_runs
+            WHERE plan_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (plan["id"],),
+        )
+    return plans
 
 
 @app.get("/api/transcode-plans/{plan_id}")

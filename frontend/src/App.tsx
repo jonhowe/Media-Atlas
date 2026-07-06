@@ -14,6 +14,7 @@ import type {
   ScanJob,
   Summary,
   TranscodePlan,
+  TranscodePlanItem,
   TranscodeProfile,
   TranscodeRun,
   TranscodeRunItem
@@ -44,14 +45,35 @@ const nav: Array<[Page, string]> = [
   ["settings", "Settings"]
 ];
 
+const FIRST_RUN_SETUP_KEY = "media-atlas:first-run-setup-dismissed";
+const TRANSCODE_PROFILES_URL = "https://github.com/jonhowe/Media-Atlas/blob/main/docs/TRANSCODE_PROFILES.md";
+
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [toast, setToast] = useState<string>("");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [showFirstRunSetup, setShowFirstRunSetup] = useState(false);
 
   useEffect(() => {
     refreshAuth();
   }, []);
+
+  useEffect(() => {
+    if (!auth?.authenticated || !auth.configured) return;
+    let dismissed = false;
+    try {
+      dismissed = window.localStorage.getItem(FIRST_RUN_SETUP_KEY) === "true";
+    } catch {
+      dismissed = false;
+    }
+    if (dismissed) return;
+    api<PlexSettings>("/api/plex/settings")
+      .then((settings) => {
+        const configured = Boolean(settings.server_url && settings.token_configured);
+        setShowFirstRunSetup(!configured);
+      })
+      .catch(() => setShowFirstRunSetup(false));
+  }, [auth]);
 
   async function refreshAuth() {
     try {
@@ -66,6 +88,15 @@ export default function App() {
     await refreshAuth();
   }
 
+  function dismissFirstRunSetup() {
+    try {
+      window.localStorage.setItem(FIRST_RUN_SETUP_KEY, "true");
+    } catch {
+      // Ignore storage failures; dismissal still works for this session.
+    }
+    setShowFirstRunSetup(false);
+  }
+
   if (!auth) {
     return <Splash message="Checking access" />;
   }
@@ -78,7 +109,7 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brandMark">MA</span>
+          <img className="brandLogo" src="/media-atlas-logo.svg" alt="" />
           <div>
             <strong>Media Atlas</strong>
             <small>Local inventory and transcodes</small>
@@ -99,24 +130,30 @@ export default function App() {
       <main>
         <header className="topbar">
           <div>
-            <h1>{nav.find(([key]) => key === page)?.[1]}</h1>
-            <p>Scan, understand, plan, and safely run staged media conversions.</p>
+            <h1>{showFirstRunSetup ? "First-run setup" : nav.find(([key]) => key === page)?.[1]}</h1>
+            <p>{showFirstRunSetup ? "Configure optional Plex enrichment before your first sync." : "Scan, understand, plan, and safely run staged media conversions."}</p>
           </div>
           <div className="topbarActions">
             {toast && <div className="toast">{toast}</div>}
             {auth.mode !== "disabled" && <button onClick={logout}>Log out</button>}
           </div>
         </header>
-        {page === "dashboard" && <Dashboard onToast={setToast} />}
-        {page === "directories" && <Directories onToast={setToast} />}
-        {page === "scans" && <Scans onToast={setToast} />}
-        {page === "library" && <Library onToast={setToast} />}
-        {page === "candidates" && <Candidates onToast={setToast} />}
-        {page === "reports" && <Reports />}
-        {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
-        {page === "runs" && <Runs onToast={setToast} />}
-        {page === "status" && <AdminStatusPage onToast={setToast} />}
-        {page === "settings" && <Settings onToast={setToast} />}
+        {showFirstRunSetup ? (
+          <FirstRunSetup onToast={setToast} onDone={dismissFirstRunSetup} />
+        ) : (
+          <>
+            {page === "dashboard" && <Dashboard onToast={setToast} />}
+            {page === "directories" && <Directories onToast={setToast} />}
+            {page === "scans" && <Scans onToast={setToast} />}
+            {page === "library" && <Library onToast={setToast} />}
+            {page === "candidates" && <Candidates onToast={setToast} />}
+            {page === "reports" && <Reports />}
+            {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
+            {page === "runs" && <Runs onToast={setToast} />}
+            {page === "status" && <AdminStatusPage onToast={setToast} />}
+            {page === "settings" && <Settings onToast={setToast} />}
+          </>
+        )}
       </main>
     </div>
   );
@@ -149,7 +186,7 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus; onAuthentica
     <div className="loginShell">
       <form className="loginPanel" onSubmit={submit}>
         <div className="brand">
-          <span className="brandMark">MA</span>
+          <img className="brandLogo" src="/media-atlas-logo.svg" alt="" />
           <div>
             <strong>Media Atlas</strong>
             <small>{auth.mode === "reverse_proxy_trusted" ? "Waiting for trusted proxy identity" : "Admin sign in"}</small>
@@ -174,6 +211,135 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus; onAuthentica
         {error && <div className="toast">{error}</div>}
       </form>
     </div>
+  );
+}
+
+function FirstRunSetup({ onToast, onDone }: { onToast: (message: string) => void; onDone: () => void }) {
+  const [plex, setPlex] = useState<PlexSettings | null>(null);
+  const [token, setToken] = useState("");
+
+  useEffect(() => {
+    api<PlexSettings>("/api/plex/settings")
+      .then((settings) => {
+        setPlex({
+          ...settings,
+          enabled: true,
+          path_mappings: settings.path_mappings.length
+            ? settings.path_mappings
+            : [{ plex_path_prefix: "", media_atlas_path_prefix: "/media" }]
+        });
+      })
+      .catch((error) => onToast(String(error)));
+  }, [onToast]);
+
+  function updatePlex(next: Partial<PlexSettings>) {
+    setPlex((current) => current ? { ...current, ...next } : current);
+  }
+
+  function updateMapping(index: number, key: keyof PlexPathMapping, value: string) {
+    if (!plex) return;
+    const mappings = [...plex.path_mappings];
+    mappings[index] = { ...mappings[index], [key]: value };
+    updatePlex({ path_mappings: mappings });
+  }
+
+  function addMapping() {
+    if (!plex) return;
+    updatePlex({ path_mappings: [...plex.path_mappings, { plex_path_prefix: "", media_atlas_path_prefix: "/media" }] });
+  }
+
+  function removeMapping(index: number) {
+    if (!plex) return;
+    updatePlex({ path_mappings: plex.path_mappings.filter((_, current) => current !== index) });
+  }
+
+  async function save(continueAfterSave = true) {
+    if (!plex) return;
+    try {
+      const payload: Record<string, unknown> = {
+        enabled: plex.enabled,
+        server_url: plex.server_url,
+        selected_library_keys: plex.selected_library_keys,
+        timeout_seconds: plex.timeout_seconds,
+        path_mappings: plex.path_mappings
+      };
+      if (token) payload.token = token;
+      await api<PlexSettings>("/api/plex/settings", {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      onToast("Plex setup saved.");
+      if (continueAfterSave) onDone();
+      return true;
+    } catch (error) {
+      onToast(String(error));
+      return false;
+    }
+  }
+
+  async function test() {
+    try {
+      const saved = await save(false);
+      if (!saved) return;
+      const result = await api<{ library_count: number }>("/api/plex/test-connection", { method: "POST", body: "{}" });
+      onToast(`Connected to Plex. Found ${result.library_count} libraries.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  if (!plex) return <Splash message="Loading setup" />;
+
+  return (
+    <section className="stack setupPage">
+      <Panel title="Plex enrichment">
+        <div className="stack">
+          <p className="muted">
+            Plex is optional. Configure it now to enrich library rows with title, library, collection, genre, watched state, and match status. You can change these settings later.
+          </p>
+          <div className="formGrid plexSetupGrid">
+            <label>
+              Enabled
+              <select value={plex.enabled ? "true" : "false"} onChange={(event) => updatePlex({ enabled: event.target.value === "true" })}>
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+            <label>
+              Server URL
+              <input value={plex.server_url || ""} onChange={(event) => updatePlex({ server_url: event.target.value })} placeholder="http://192.168.1.106:32400" />
+            </label>
+            <label>
+              Token {plex.token_configured && <span className="muted">{plex.token_hint}</span>}
+              <input value={token} onChange={(event) => setToken(event.target.value)} placeholder={plex.token_configured ? "Leave blank to keep current token" : "Plex token"} />
+            </label>
+            <label>
+              Timeout seconds
+              <input type="number" min="1" max="120" value={plex.timeout_seconds} onChange={(event) => updatePlex({ timeout_seconds: Number(event.target.value) || 10 })} />
+            </label>
+          </div>
+          <div>
+            <h3>Path mappings</h3>
+            <p className="muted">Map Plex file paths to paths Media Atlas can see. In Docker this usually maps a Plex host path such as `/mnt/media` to the container path `/media`.</p>
+            <div className="mappingList">
+              {plex.path_mappings.map((mapping, index) => (
+                <div className="mappingRow" key={index}>
+                  <input value={mapping.plex_path_prefix} onChange={(event) => updateMapping(index, "plex_path_prefix", event.target.value)} placeholder="/mnt/media" />
+                  <input value={mapping.media_atlas_path_prefix} onChange={(event) => updateMapping(index, "media_atlas_path_prefix", event.target.value)} placeholder="/media" />
+                  <button className="danger" onClick={() => removeMapping(index)}>Remove</button>
+                </div>
+              ))}
+              <button onClick={addMapping}>Add mapping</button>
+            </div>
+          </div>
+          <div className="rowActions">
+            <button className="primary" onClick={() => save(true)}>Save and continue</button>
+            <button onClick={test}>Save and test</button>
+            <button onClick={onDone}>Skip for now</button>
+          </div>
+        </div>
+      </Panel>
+    </section>
   );
 }
 
@@ -722,7 +888,56 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
 
   return (
     <section className="stack">
+      <Panel title="Existing Plans">
+        <div className="panelIntro">
+          <p className="muted">Review planned files and run history before starting another staged transcode run.</p>
+          <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th>Created</th>
+              <th>Files involved</th>
+              <th>Run history</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {plans.map((plan) => (
+              <tr key={plan.id}>
+                <td>
+                  <strong>{plan.name}</strong>
+                  <div className="muted">{plan.profile_name || "Unknown profile"} · {plan.status}</div>
+                </td>
+                <td>{formatDateTime(plan.created_at)}</td>
+                <td>
+                  <div className="planFiles">
+                    <strong>{plan.item_count || 0} files</strong>
+                    {(plan.sample_items || []).map((item) => (
+                      <span key={item.id} className="path">{planItemName(item)}</span>
+                    ))}
+                    {planRemainingCount(plan) > 0 && <span className="muted">+ {planRemainingCount(plan)} more</span>}
+                  </div>
+                </td>
+                <td>
+                  <PlanRunSummary plan={plan} />
+                </td>
+                <td className="rowActions">
+                  <a className="button" href={`/api/transcode-plans/${plan.id}/download.csv`}>CSV</a>
+                  <a className="button" href={`/api/transcode-plans/${plan.id}/download.sh`}>Script</a>
+                  <button onClick={() => startRun(plan)}>Start run</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
       <Panel title="Create Plan From Easy Wins">
+        <div className="panelIntro">
+          <p className="muted">Choose candidate files and a staged-output profile.</p>
+          <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
+        </div>
         <div className="formGrid">
           <label>
             Plan name
@@ -762,35 +977,31 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
           </tbody>
         </table>
       </Panel>
-      <Panel title="Existing Plans">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Profile</th>
-              <th>Items</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {plans.map((plan) => (
-              <tr key={plan.id}>
-                <td>{plan.name}</td>
-                <td>{plan.profile_name}</td>
-                <td>{plan.item_count}</td>
-                <td>{plan.status}</td>
-                <td className="rowActions">
-                  <a className="button" href={`/api/transcode-plans/${plan.id}/download.csv`}>CSV</a>
-                  <a className="button" href={`/api/transcode-plans/${plan.id}/download.sh`}>Script</a>
-                  <button onClick={() => startRun(plan)}>Start run</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
     </section>
+  );
+}
+
+function PlanRunSummary({ plan }: { plan: TranscodePlan }) {
+  if (!plan.run_count || !plan.latest_run) {
+    return (
+      <div className="planRunSummary">
+        <Badge>Never run</Badge>
+        <span className="muted">No transcode run has been started from this plan.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="planRunSummary">
+      <div>
+        <StatusBadge status={plan.latest_run.status} />
+        <span className="muted"> latest run #{plan.latest_run.id}</span>
+      </div>
+      <span className="muted">Created {formatDateTime(plan.latest_run.created_at)}</span>
+      <span className="muted">Started {formatDateTime(plan.latest_run.started_at)}</span>
+      <span className="muted">Stopped {formatStopDateTime(plan.latest_run.finished_at, plan.latest_run.status)}</span>
+      <span className="muted">{plan.latest_run.completed_items} complete, {plan.latest_run.failed_items} failed, {plan.latest_run.canceled_items} canceled</span>
+      {plan.run_count > 1 && <span className="muted">{plan.run_count} total runs</span>}
+    </div>
   );
 }
 
@@ -802,6 +1013,18 @@ function defaultProfileId(profiles: TranscodeProfile[]) {
 
 function selectedProfile(profiles: TranscodeProfile[], profileId: number) {
   return profiles.find((profile) => profile.id === profileId);
+}
+
+function planItemName(item: TranscodePlanItem) {
+  if (item.filename) return item.filename;
+  const parts = item.source_path.split(/[\\/]/);
+  return parts[parts.length - 1] || item.source_path;
+}
+
+function planRemainingCount(plan: TranscodePlan) {
+  const itemCount = plan.item_count || 0;
+  const shown = plan.sample_items?.length || 0;
+  return Math.max(0, itemCount - shown);
 }
 
 function Runs({ onToast }: { onToast: (message: string) => void }) {

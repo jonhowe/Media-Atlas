@@ -228,6 +228,9 @@ export type TranscodePlan = {
   created_at: string;
   item_count?: number;
   items?: TranscodePlanItem[];
+  sample_items?: TranscodePlanItem[];
+  run_count?: number;
+  latest_run?: TranscodeRunSummary | null;
 };
 
 export type TranscodePlanItem = {
@@ -236,9 +239,24 @@ export type TranscodePlanItem = {
   source_path: string;
   target_path: string;
   action: string;
+  filename?: string | null;
   reason?: string;
   command_display?: string;
-  warnings_json: string;
+  warnings_json?: string;
+};
+
+export type TranscodeRunSummary = {
+  id: number;
+  name: string;
+  status: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_items: number;
+  completed_items: number;
+  failed_items: number;
+  canceled_items: number;
+  progress_percent: number;
 };
 
 export type TranscodeRun = {
