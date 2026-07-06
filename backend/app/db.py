@@ -640,6 +640,17 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE transcode_run_items ADD COLUMN published_backup_path TEXT;
         """,
     ),
+    (
+        "0004_publish_progress",
+        """
+        ALTER TABLE transcode_run_items ADD COLUMN publish_started_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_finished_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_step TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_progress_percent REAL NOT NULL DEFAULT 0;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_bytes_done INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_bytes_total INTEGER NOT NULL DEFAULT 0;
+        """,
+    ),
 ]
 
 

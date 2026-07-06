@@ -861,7 +861,8 @@ async def transcode_item_log(run_id: int, item_id: int) -> str:
 @app.post("/api/transcode-runs/{run_id}/items/{item_id}/publish")
 async def publish_transcode_item(run_id: int, item_id: int, payload: PublishRunItemRequest) -> dict[str, Any]:
     try:
-        return transcode_manager.publish_item(
+        return await asyncio.to_thread(
+            transcode_manager.publish_item,
             run_id,
             item_id,
             payload.source_path,

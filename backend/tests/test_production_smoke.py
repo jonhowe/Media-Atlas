@@ -34,6 +34,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0001_initial_schema", db.migration_status()["applied"])
             self.assertIn("0002_archive_transcode_plans", db.migration_status()["applied"])
             self.assertIn("0003_publish_transcode_items", db.migration_status()["applied"])
+            self.assertIn("0004_publish_progress", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
@@ -120,6 +121,13 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertEqual(source_path.read_bytes(), b"transcoded media bytes")
             self.assertEqual(backup_path.read_bytes(), b"original media bytes")
             self.assertTrue(backup_path.is_relative_to(CONFIG.transcoder.backup_dir))
+            self.assertEqual(published["publish_status"], "published")
+            self.assertEqual(published["publish_step"], "completed")
+            self.assertEqual(published["publish_progress_percent"], 100)
+            self.assertEqual(
+                published["publish_bytes_total"],
+                len(b"original media bytes") + len(b"transcoded media bytes"),
+            )
             self.assertEqual(list(media_dir.glob("*media-atlas-backup*")), [])
 
             with TestClient(app) as client:

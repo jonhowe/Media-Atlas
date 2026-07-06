@@ -46,17 +46,38 @@ const nav: Array<[Page, string]> = [
 ];
 
 const FIRST_RUN_SETUP_KEY = "media-atlas:first-run-setup-dismissed";
+const THEME_STORAGE_KEY = "media-atlas:theme";
 const TRANSCODE_PROFILES_URL = "https://github.com/jonhowe/Media-Atlas/blob/main/docs/TRANSCODE_PROFILES.md";
+
+type Theme = "light" | "dark";
+
+function getInitialTheme(): Theme {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [toast, setToast] = useState<string>("");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [showFirstRunSetup, setShowFirstRunSetup] = useState(false);
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
   useEffect(() => {
     refreshAuth();
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Theme still applies for this session when storage is unavailable.
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (!auth?.authenticated || !auth.configured) return;
@@ -97,6 +118,10 @@ export default function App() {
     setShowFirstRunSetup(false);
   }
 
+  function toggleTheme() {
+    setTheme((current) => current === "dark" ? "light" : "dark");
+  }
+
   if (!auth) {
     return <Splash message="Checking access" />;
   }
@@ -135,6 +160,14 @@ export default function App() {
           </div>
           <div className="topbarActions">
             {toast && <div className="toast">{toast}</div>}
+            <button
+              className="themeToggle"
+              type="button"
+              aria-pressed={theme === "dark"}
+              onClick={toggleTheme}
+            >
+              {theme === "dark" ? "Light mode" : "Dark mode"}
+            </button>
             {auth.mode !== "disabled" && <button onClick={logout}>Log out</button>}
           </div>
         </header>
@@ -1080,7 +1113,12 @@ function planRemainingCount(plan: TranscodePlan) {
 function canPublishItem(item: TranscodeRunItem) {
   return item.status === "succeeded"
     && item.verification_status === "verified"
-    && !item.published_at;
+    && !item.published_at
+    && !isPublishingItem(item);
+}
+
+function isPublishingItem(item: TranscodeRunItem) {
+  return item.publish_status === "queued" || item.publish_status === "running";
 }
 
 function Runs({ onToast }: { onToast: (message: string) => void }) {
@@ -1137,6 +1175,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
       return;
     }
     try {
+      onToast("Publish started. Progress will update in the run details.");
       await api<TranscodeRunItem>(`/api/transcode-runs/${runId}/items/${item.id}/publish`, {
         method: "POST",
         body: JSON.stringify({
@@ -1226,6 +1265,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                 <th>Timing</th>
                 <th>Target</th>
                 <th>Verification</th>
+                <th>Publish</th>
                 <th></th>
               </tr>
             </thead>
@@ -1260,13 +1300,33 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                   <td>
                     <div className="statusGrid">
                       <span>{item.verification_status} {item.verification_message}</span>
-                      {item.publish_status && (
-                        <span>
-                          <StatusBadge status={item.publish_status} /> {item.publish_message}
-                        </span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="scanProgressCell">
+                      {item.publish_status ? (
+                        <>
+                          <div className="progressHeader">
+                            <StatusBadge status={item.publish_status} />
+                            <strong>{Math.round(item.publish_progress_percent || 0)}%</strong>
+                          </div>
+                          <Progress value={item.publish_progress_percent || 0} />
+                          <div className="scanTiming">
+                            {item.publish_step && <span>Step {formatStatusLabel(item.publish_step)}</span>}
+                            {item.publish_message && <span>{item.publish_message}</span>}
+                            <span>
+                              {formatBytes(item.publish_bytes_done || 0)} / {formatBytes(item.publish_bytes_total || 0)}
+                            </span>
+                            <span>Started {formatDateTime(item.publish_started_at)}</span>
+                            <span>Stopped {formatStopDateTime(item.publish_finished_at, item.publish_status || undefined)}</span>
+                            <span>Duration {formatPublishDuration(item)}</span>
+                          </div>
+                          {item.published_at && <span className="muted">Published {formatDateTime(item.published_at)}</span>}
+                          {item.published_backup_path && <span className="muted">Backup {item.published_backup_path}</span>}
+                        </>
+                      ) : (
+                        <span className="muted">Not published</span>
                       )}
-                      {item.published_at && <span className="muted">Published {formatDateTime(item.published_at)}</span>}
-                      {item.published_backup_path && <span className="muted">Backup {item.published_backup_path}</span>}
                     </div>
                   </td>
                   <td className="rowActions">
@@ -1926,6 +1986,14 @@ function formatItemDuration(item: TranscodeRunItem) {
   return formatDurationBetween(item.started_at, item.finished_at, item.status === "running");
 }
 
+function formatPublishDuration(item: TranscodeRunItem) {
+  return formatDurationBetween(
+    item.publish_started_at,
+    item.publish_finished_at,
+    item.publish_status === "running" || item.publish_status === "queued"
+  );
+}
+
 function formatDurationBetween(start?: string | null, end?: string | null, live = false) {
   if (!start) return "Not started";
   const startMs = new Date(start).getTime();
@@ -1942,4 +2010,8 @@ function formatElapsed(milliseconds: number) {
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
+}
+
+function formatStatusLabel(value: string) {
+  return value.replace(/_/g, " ");
 }

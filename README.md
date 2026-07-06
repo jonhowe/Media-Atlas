@@ -164,6 +164,8 @@ Completed transcode items can be published from Transcode Runs when the item suc
 
 By default, the backup directory is a peer of the staging directory: `/app/transcode-backups` beside `/app/transcode-staging` in Docker, bind-mounted to `./transcode-backups` in the install directory. Backups are grouped by run and item, and the exact backup path is recorded on the transcode run item.
 
+The Transcode Runs page shows publish status, current step, percentage, copied/moved bytes, start time, stop time, duration, and final backup path for each item.
+
 The UI requires two confirmations:
 
 1. Confirm that you want to publish the staged output to the original location.

@@ -299,5 +299,11 @@ export type TranscodeRunItem = {
   publish_status?: string | null;
   publish_message?: string | null;
   published_backup_path?: string | null;
+  publish_started_at?: string | null;
+  publish_finished_at?: string | null;
+  publish_step?: string | null;
+  publish_progress_percent?: number | null;
+  publish_bytes_done?: number | null;
+  publish_bytes_total?: number | null;
   warnings_json: string;
 };
