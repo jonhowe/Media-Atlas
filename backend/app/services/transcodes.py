@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .. import db
 from ..config import CONFIG
@@ -29,6 +29,20 @@ class TranscodeManager:
 
     async def recover_startup_jobs(self) -> None:
         db.mark_running_transcodes_interrupted()
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET publish_status = 'interrupted',
+                publish_step = 'interrupted',
+                publish_message = ?,
+                publish_finished_at = ?
+            WHERE publish_status IN ('queued', 'running')
+            """,
+            (
+                "Backend restarted while publish was active. Inspect the original file, staged output, and backup before retrying.",
+                db.utc_now(),
+            ),
+        )
         queued = db.query_one(
             """
             SELECT id
@@ -162,6 +176,8 @@ class TranscodeManager:
             raise ValueError("Transcode run item not found.")
         if item.get("published_at"):
             raise ValueError("This transcode item has already been published.")
+        if item.get("publish_status") in {"queued", "running"}:
+            raise ValueError("This transcode item is already being published.")
         if item["status"] != "succeeded" or item.get("verification_status") != "verified":
             raise ValueError("Only verified, successful transcode items can be published.")
         if source_path != item["source_path"] or target_path != item["target_path"]:
@@ -169,67 +185,196 @@ class TranscodeManager:
 
         source = Path(item["source_path"])
         target = Path(item["target_path"])
+        now = db.utc_now()
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET publish_status = 'running',
+                publish_message = 'Validating publish inputs.',
+                publish_step = 'validating',
+                publish_started_at = COALESCE(publish_started_at, ?),
+                publish_finished_at = NULL,
+                publish_progress_percent = 0,
+                publish_bytes_done = 0,
+                publish_bytes_total = 0
+            WHERE id = ?
+            """,
+            (now, item_id),
+        )
         if not _is_within(target, CONFIG.transcoder.staging_dir):
+            self._store_publish_failure(item_id, "Staged output path is outside the configured transcode staging directory.")
             raise ValueError("Staged output path is outside the configured transcode staging directory.")
         if not source.exists() or not source.is_file():
+            self._store_publish_failure(item_id, "Original source file is missing.")
             raise ValueError("Original source file is missing.")
         if not target.exists() or not target.is_file() or target.stat().st_size == 0:
+            self._store_publish_failure(item_id, "Verified staged output is missing or empty.")
             raise ValueError("Verified staged output is missing or empty.")
         if source.resolve() == target.resolve():
+            self._store_publish_failure(item_id, "Source and staged output paths must be different.")
             raise ValueError("Source and staged output paths must be different.")
         if not os.access(source, os.R_OK) or not os.access(source.parent, os.W_OK):
+            self._store_publish_failure(
+                item_id,
+                "Original source file is not readable or its directory is not writable. Check the media mount mode.",
+            )
             raise ValueError("Original source file is not readable or its directory is not writable. Check the media mount mode.")
         try:
             CONFIG.transcoder.backup_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
+            self._store_publish_failure(item_id, f"Transcode backup directory is not writable: {exc}")
             raise ValueError(f"Transcode backup directory is not writable: {exc}") from exc
         if not os.access(CONFIG.transcoder.backup_dir, os.W_OK):
+            self._store_publish_failure(item_id, "Transcode backup directory is not writable.")
             raise ValueError("Transcode backup directory is not writable.")
 
         backup_path = _publish_backup_path(source, run_id, item_id)
         temp_path = _publish_temp_path(source, run_id, item_id)
-        now = db.utc_now()
+        source_size = source.stat().st_size
+        target_size = target.stat().st_size
+        total_bytes = max(1, source_size + target_size)
+        self._store_publish_progress(
+            item_id,
+            "copying_staged_output",
+            "Copying staged output into a temporary file beside the original.",
+            0,
+            total_bytes,
+        )
         try:
-            shutil.copy2(target, temp_path)
-            _move_file(source, backup_path)
+            _copy_file_with_progress(
+                target,
+                temp_path,
+                0,
+                total_bytes,
+                lambda done: self._store_publish_progress(
+                    item_id,
+                    "copying_staged_output",
+                    "Copying staged output into a temporary file beside the original.",
+                    done,
+                    total_bytes,
+                ),
+            )
+            self._store_publish_progress(
+                item_id,
+                "moving_original_to_backup",
+                "Moving original file into transcode backup storage.",
+                target_size,
+                total_bytes,
+            )
+            _move_file(
+                source,
+                backup_path,
+                target_size,
+                total_bytes,
+                lambda done: self._store_publish_progress(
+                    item_id,
+                    "moving_original_to_backup",
+                    "Moving original file into transcode backup storage.",
+                    done,
+                    total_bytes,
+                ),
+            )
             try:
+                self._store_publish_progress(
+                    item_id,
+                    "replacing_original",
+                    "Replacing original path with staged output.",
+                    total_bytes,
+                    total_bytes,
+                )
                 temp_path.replace(source)
             except OSError:
                 if backup_path.exists() and not source.exists():
-                    _move_file(backup_path, source)
+                    self._store_publish_progress(
+                        item_id,
+                        "rolling_back",
+                        "Replacement failed; moving backup back to the original path.",
+                        0,
+                        max(1, source_size),
+                    )
+                    _move_file(
+                        backup_path,
+                        source,
+                        0,
+                        max(1, source_size),
+                        lambda done: self._store_publish_progress(
+                            item_id,
+                            "rolling_back",
+                            "Replacement failed; moving backup back to the original path.",
+                            done,
+                            max(1, source_size),
+                        ),
+                    )
                 raise
         except OSError as exc:
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
             message = f"Publish failed: {exc}"
-            db.execute(
-                """
-                UPDATE transcode_run_items
-                SET publish_status = 'failed',
-                    publish_message = ?
-                WHERE id = ?
-                """,
-                (message, item_id),
-            )
+            self._store_publish_failure(item_id, message)
             raise ValueError(message) from exc
 
+        finished_at = db.utc_now()
         db.execute(
             """
             UPDATE transcode_run_items
             SET published_at = ?,
                 publish_status = 'published',
                 publish_message = ?,
+                publish_step = 'completed',
+                publish_finished_at = ?,
+                publish_progress_percent = 100,
+                publish_bytes_done = ?,
+                publish_bytes_total = ?,
                 published_backup_path = ?
             WHERE id = ?
             """,
             (
-                now,
+                finished_at,
                 "Published staged output to original source path. Original file was moved to transcode backup storage.",
+                finished_at,
+                total_bytes,
+                total_bytes,
                 str(backup_path),
                 item_id,
             ),
         )
         return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
+
+    def _store_publish_progress(
+        self,
+        item_id: int,
+        step: str,
+        message: str,
+        bytes_done: int,
+        bytes_total: int,
+    ) -> None:
+        percent = min(99.0, max(0.0, (bytes_done / max(1, bytes_total)) * 100))
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET publish_status = 'running',
+                publish_step = ?,
+                publish_message = ?,
+                publish_progress_percent = ?,
+                publish_bytes_done = ?,
+                publish_bytes_total = ?
+            WHERE id = ?
+            """,
+            (step, message, percent, bytes_done, bytes_total, item_id),
+        )
+
+    def _store_publish_failure(self, item_id: int, message: str) -> None:
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET publish_status = 'failed',
+                publish_step = 'failed',
+                publish_message = ?,
+                publish_finished_at = ?
+            WHERE id = ?
+            """,
+            (message, db.utc_now(), item_id),
+        )
 
     async def _worker_loop(self) -> None:
         while True:
@@ -577,13 +722,49 @@ def _publish_temp_path(source: Path, run_id: int, item_id: int) -> Path:
     raise ValueError(f"Could not find available temporary publish path for {source}")
 
 
-def _move_file(source: Path, target: Path) -> None:
+ProgressCallback = Callable[[int], None]
+
+
+def _copy_file_with_progress(
+    source: Path,
+    target: Path,
+    base_bytes_done: int,
+    bytes_total: int,
+    progress: ProgressCallback,
+) -> None:
+    copied = 0
+    buffer_size = 4 * 1024 * 1024
+    report_interval = 16 * 1024 * 1024
+    next_report = report_interval
+    with source.open("rb") as source_file:
+        with target.open("wb") as target_file:
+            while True:
+                chunk = source_file.read(buffer_size)
+                if not chunk:
+                    break
+                target_file.write(chunk)
+                copied += len(chunk)
+                if copied >= next_report:
+                    progress(min(bytes_total, base_bytes_done + copied))
+                    next_report += report_interval
+    shutil.copystat(source, target)
+    progress(min(bytes_total, base_bytes_done + source.stat().st_size))
+
+
+def _move_file(
+    source: Path,
+    target: Path,
+    base_bytes_done: int,
+    bytes_total: int,
+    progress: ProgressCallback,
+) -> None:
     try:
         source.replace(target)
+        progress(min(bytes_total, base_bytes_done + target.stat().st_size))
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
-        shutil.copy2(source, target)
+        _copy_file_with_progress(source, target, base_bytes_done, bytes_total, progress)
         try:
             source.unlink()
         except OSError:

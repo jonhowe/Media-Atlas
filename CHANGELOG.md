@@ -10,6 +10,8 @@ This changelog summarizes the commits currently on `main`. New user-facing chang
 - Changed GHCR publishing to run only for published GitHub Releases.
 - Added a two-confirmation publish action for verified staged transcode outputs with original-file backup.
 - Moved manual publish backups into dedicated transcode backup storage beside transcode staging.
+- Added publish status, step, percent, byte, timing, and backup-path details to transcode run items.
+- Added a persisted light/dark theme toggle for the web UI.
 
 ## Main Branch History
 
