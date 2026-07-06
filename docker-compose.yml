@@ -12,6 +12,7 @@ services:
       MEDIA_ATLAS_REPORTS_DIR: "/app/reports"
       MEDIA_ATLAS_LOGS_DIR: "/app/logs"
       MEDIA_ATLAS_TRANSCODE_STAGING_DIR: "/app/transcode-staging"
+      MEDIA_ATLAS_TRANSCODE_BACKUP_DIR: "/app/transcode-backups"
       MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS: "${MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS:-/media}"
       MEDIA_ATLAS_SCAN_CONCURRENCY: "${MEDIA_ATLAS_SCAN_CONCURRENCY:-2}"
       MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS:-60}"
@@ -37,6 +38,7 @@ services:
       - ./reports:/app/reports
       - ./logs:/app/logs
       - ./transcode-staging:/app/transcode-staging
+      - ./transcode-backups:/app/transcode-backups
       # Set MEDIA_ATLAS_MEDIA_ROOT in .env, for example /mnt/media.
       - ${MEDIA_ATLAS_MEDIA_ROOT:?Set MEDIA_ATLAS_MEDIA_ROOT in .env}:/media:ro
       # Optional writable staging/output mount if you want staged transcodes

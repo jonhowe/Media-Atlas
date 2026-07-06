@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import shutil
@@ -178,18 +179,24 @@ class TranscodeManager:
             raise ValueError("Source and staged output paths must be different.")
         if not os.access(source, os.R_OK) or not os.access(source.parent, os.W_OK):
             raise ValueError("Original source file is not readable or its directory is not writable. Check the media mount mode.")
+        try:
+            CONFIG.transcoder.backup_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"Transcode backup directory is not writable: {exc}") from exc
+        if not os.access(CONFIG.transcoder.backup_dir, os.W_OK):
+            raise ValueError("Transcode backup directory is not writable.")
 
         backup_path = _publish_backup_path(source, run_id, item_id)
         temp_path = _publish_temp_path(source, run_id, item_id)
         now = db.utc_now()
         try:
             shutil.copy2(target, temp_path)
-            source.replace(backup_path)
+            _move_file(source, backup_path)
             try:
                 temp_path.replace(source)
             except OSError:
                 if backup_path.exists() and not source.exists():
-                    backup_path.replace(source)
+                    _move_file(backup_path, source)
                 raise
         except OSError as exc:
             if temp_path.exists():
@@ -217,7 +224,7 @@ class TranscodeManager:
             """,
             (
                 now,
-                "Published staged output to original source path. Original file was moved to backup.",
+                "Published staged output to original source path. Original file was moved to transcode backup storage.",
                 str(backup_path),
                 item_id,
             ),
@@ -549,12 +556,14 @@ def _is_within(path: Path, root: Path) -> bool:
 
 def _publish_backup_path(source: Path, run_id: int, item_id: int) -> Path:
     suffix = db.utc_now().replace(":", "").replace("+", "Z")
-    base_name = f"{source.name}.media-atlas-backup-run-{run_id}-item-{item_id}-{suffix}"
-    candidate = source.with_name(base_name)
+    backup_dir = CONFIG.transcoder.backup_dir / f"run-{run_id}" / f"item-{item_id}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"{source.name}.media-atlas-backup-{suffix}"
+    candidate = backup_dir / base_name
     for index in range(1, 10_000):
         if not candidate.exists():
             return candidate
-        candidate = source.with_name(f"{base_name}-{index}")
+        candidate = backup_dir / f"{base_name}-{index}"
     raise ValueError(f"Could not find available backup path for {source}")
 
 
@@ -566,6 +575,20 @@ def _publish_temp_path(source: Path, run_id: int, item_id: int) -> Path:
             return candidate
         candidate = source.with_name(f"{base_name}-{index}")
     raise ValueError(f"Could not find available temporary publish path for {source}")
+
+
+def _move_file(source: Path, target: Path) -> None:
+    try:
+        source.replace(target)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copy2(source, target)
+        try:
+            source.unlink()
+        except OSError:
+            target.unlink(missing_ok=True)
+            raise
 
 
 def build_command(profile: dict[str, Any], source_path: str, target_path: str) -> list[str] | None:

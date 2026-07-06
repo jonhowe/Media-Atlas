@@ -164,6 +164,7 @@ async def health() -> dict[str, Any]:
         "reports_dir": str(CONFIG.reports_dir),
         "logs_dir": str(CONFIG.logs_dir),
         "transcode_staging_dir": str(CONFIG.transcoder.staging_dir),
+        "transcode_backup_dir": str(CONFIG.transcoder.backup_dir),
         "readiness": status,
     }
 
@@ -211,6 +212,7 @@ async def settings() -> dict[str, Any]:
         "reports_dir": str(CONFIG.reports_dir),
         "logs_dir": str(CONFIG.logs_dir),
         "transcode_staging_dir": str(CONFIG.transcoder.staging_dir),
+        "transcode_backup_dir": str(CONFIG.transcoder.backup_dir),
         "scan_concurrency": CONFIG.scanner.concurrency,
         "transcode_concurrency": CONFIG.transcoder.concurrency,
         "allowed_browse_roots": [str(path) for path in CONFIG.allowed_browse_roots],

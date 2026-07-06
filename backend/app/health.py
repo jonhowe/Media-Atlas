@@ -51,6 +51,7 @@ def admin_status() -> dict[str, Any]:
             "reports_dir": _disk_payload(CONFIG.reports_dir),
             "logs_dir": _disk_payload(CONFIG.logs_dir),
             "transcode_staging_dir": _disk_payload(CONFIG.transcoder.staging_dir),
+            "transcode_backup_dir": _disk_payload(CONFIG.transcoder.backup_dir),
         },
         "recent_failures": {
             "scans": db.query_all(
@@ -110,6 +111,7 @@ def _path_checks() -> dict[str, dict[str, Any]]:
         "reports_dir": CONFIG.reports_dir,
         "logs_dir": CONFIG.logs_dir,
         "transcode_staging_dir": CONFIG.transcoder.staging_dir,
+        "transcode_backup_dir": CONFIG.transcoder.backup_dir,
     }
     return {key: _writable_path_check(path) for key, path in paths.items()}
 
@@ -128,6 +130,7 @@ def _disk_checks() -> dict[str, dict[str, Any]]:
     return {
         "data_dir": _disk_payload(CONFIG.data_dir),
         "transcode_staging_dir": _disk_payload(CONFIG.transcoder.staging_dir),
+        "transcode_backup_dir": _disk_payload(CONFIG.transcoder.backup_dir),
     }
 
 

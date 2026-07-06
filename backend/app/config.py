@@ -54,6 +54,7 @@ class TranscoderConfig:
     concurrency: int
     timeout_seconds: int
     staging_dir: Path
+    backup_dir: Path
     duration_tolerance_seconds: float
     duration_tolerance_percent: float
     min_free_bytes: int
@@ -139,8 +140,11 @@ def load_config() -> AppConfig:
     staging_dir = Path(
         os.getenv("MEDIA_ATLAS_TRANSCODE_STAGING_DIR", base_dir / "transcode-staging")
     ).resolve()
+    backup_dir = Path(
+        os.getenv("MEDIA_ATLAS_TRANSCODE_BACKUP_DIR", staging_dir.parent / "transcode-backups")
+    ).resolve()
 
-    for directory in (data_dir, reports_dir, logs_dir, staging_dir):
+    for directory in (data_dir, reports_dir, logs_dir, staging_dir, backup_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     default_browse_roots = [
@@ -231,6 +235,7 @@ def load_config() -> AppConfig:
             concurrency=1,
             timeout_seconds=max(0, _int_env("MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS", 0)),
             staging_dir=staging_dir,
+            backup_dir=backup_dir,
             duration_tolerance_seconds=_float_env("MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS", 3),
             duration_tolerance_percent=_float_env("MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT", 0.02),
             min_free_bytes=max(

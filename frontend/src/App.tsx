@@ -1126,7 +1126,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
 
   async function publishItem(runId: number, item: TranscodeRunItem) {
     const firstConfirmed = window.confirm(
-      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\nMedia Atlas will move the original file to a backup path beside it, then copy the staged output into the original path.`
+      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\nMedia Atlas will move the original file into transcode backup storage, then copy the staged output into the original path.`
     );
     if (!firstConfirmed) return;
     const phrase = window.prompt(

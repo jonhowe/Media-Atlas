@@ -7,6 +7,7 @@ export type Health = {
   reports_dir: string;
   logs_dir: string;
   transcode_staging_dir: string;
+  transcode_backup_dir: string;
   readiness?: ReadinessStatus;
 };
 

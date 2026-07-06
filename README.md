@@ -4,7 +4,7 @@
 
 Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs.
 
-Media Atlas stages transcode output separately from originals by default. Replacing a source file is only available through an explicit manual publish action for verified outputs, requires two confirmations, and creates a same-directory backup of the original first.
+Media Atlas stages transcode output separately from originals by default. Replacing a source file is only available through an explicit manual publish action for verified outputs, requires two confirmations, and moves the original into transcode backup storage first.
 
 ## Capabilities
 
@@ -76,6 +76,7 @@ services:
       MEDIA_ATLAS_REPORTS_DIR: "/app/reports"
       MEDIA_ATLAS_LOGS_DIR: "/app/logs"
       MEDIA_ATLAS_TRANSCODE_STAGING_DIR: "/app/transcode-staging"
+      MEDIA_ATLAS_TRANSCODE_BACKUP_DIR: "/app/transcode-backups"
       MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS: "${MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS:-/media}"
       MEDIA_ATLAS_SCAN_CONCURRENCY: "${MEDIA_ATLAS_SCAN_CONCURRENCY:-2}"
       MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS: "${MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS:-60}"
@@ -101,6 +102,7 @@ services:
       - ./reports:/app/reports
       - ./logs:/app/logs
       - ./transcode-staging:/app/transcode-staging
+      - ./transcode-backups:/app/transcode-backups
       - ${MEDIA_ATLAS_MEDIA_ROOT:?Set MEDIA_ATLAS_MEDIA_ROOT in .env}:/media:ro
 ```
 
@@ -151,13 +153,16 @@ Persistent app data is bind-mounted into the install directory:
 ./reports             CSV/report output
 ./logs                app and transcode logs
 ./transcode-staging   staged transcode outputs
+./transcode-backups   originals moved during manual publish
 ```
 
 Source media is mounted read-only in the default Compose file. Staged transcode output is written separately. The manual publish action requires the media mount to be writable; keep the default read-only mount unless you intentionally want Media Atlas to replace originals.
 
 ## Publishing Transcoded Outputs
 
-Completed transcode items can be published from Transcode Runs when the item succeeded and output verification passed. Publishing copies the staged output over the original source path after moving the original file to a same-directory `media-atlas-backup` filename.
+Completed transcode items can be published from Transcode Runs when the item succeeded and output verification passed. Publishing copies the staged output over the original source path after moving the original file into transcode backup storage.
+
+By default, the backup directory is a peer of the staging directory: `/app/transcode-backups` beside `/app/transcode-staging` in Docker, bind-mounted to `./transcode-backups` in the install directory. Backups are grouped by run and item, and the exact backup path is recorded on the transcode run item.
 
 The UI requires two confirmations:
 
@@ -225,6 +230,7 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 | `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT` | Verification tolerance percent | `.env` | Percent-based duration tolerance for output verification. Default: `0.02`. The app uses the larger of this value and the seconds tolerance. |
 | `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS` | Verification tolerance seconds | `.env` | Minimum absolute duration tolerance for output verification. Default: `3`. |
 | `MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES` | Transcode free-space floor | `.env` | Minimum free bytes required on the staging filesystem before starting a transcode item. Default: `1073741824` bytes. |
+| `MEDIA_ATLAS_TRANSCODE_BACKUP_DIR` | Original-file backup directory | `docker-compose.yml` environment | Directory where originals are moved before a verified staged output is manually published over the source path. Defaults to a peer directory beside `MEDIA_ATLAS_TRANSCODE_STAGING_DIR`, usually `/app/transcode-backups` in Docker. The example Compose file bind-mounts this to `./transcode-backups`. |
 | `MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT` | Alternate staging host path | `.env` with Compose edit | Compose-only helper for mounting staged output somewhere other than `./transcode-staging`. Requires uncommenting/adding the matching volume line in `docker-compose.yml`. |
 | `MEDIA_ATLAS_TRANSCODE_STAGING_DIR` | Staged output directory | `docker-compose.yml` environment | Container/app path for staged transcode outputs. Docker default: `/app/transcode-staging`, normally bind-mounted to `./transcode-staging`. |
 | `MEDIA_ATLAS_TRUSTED_USER_HEADER` | Trusted proxy user header | reverse proxy env | Header trusted in `reverse_proxy_trusted` auth mode. Use only behind a proxy that authenticates users and strips any client-supplied copy. Default: `X-Forwarded-User`. |

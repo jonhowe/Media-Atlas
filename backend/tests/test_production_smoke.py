@@ -25,7 +25,8 @@ class ProductionSmokeTest(unittest.TestCase):
             from fastapi.testclient import TestClient
 
             from app import db
-            from app.main import app
+            from app.config import CONFIG
+            from app.main import app, transcode_manager
             from app.services.transcodes import build_command
 
             db.init_db()
@@ -33,6 +34,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0001_initial_schema", db.migration_status()["applied"])
             self.assertIn("0002_archive_transcode_plans", db.migration_status()["applied"])
             self.assertIn("0003_publish_transcode_items", db.migration_status()["applied"])
+            self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
             self.assertTrue(
@@ -75,6 +77,50 @@ class ProductionSmokeTest(unittest.TestCase):
                 "hevc_vaapi",
                 build_command({"command_template": "hevc_vaapi"}, "/source.mkv", "/target.mkv") or [],
             )
+            media_dir = Path(temp_dir) / "media"
+            media_dir.mkdir()
+            source_path = media_dir / "Movie.mkv"
+            target_path = CONFIG.transcoder.staging_dir / "Movie.transcoded.mkv"
+            source_path.write_bytes(b"original media bytes")
+            target_path.write_bytes(b"transcoded media bytes")
+            now = db.utc_now()
+            run_id = db.execute(
+                """
+                INSERT INTO transcode_runs (name, status, created_at, total_items, completed_items)
+                VALUES (?, 'succeeded', ?, 1, 1)
+                """,
+                ("Publish test", now),
+            )
+            item_id = db.execute(
+                """
+                INSERT INTO transcode_run_items (
+                    run_id, status, source_path, target_path, command_json, command_display,
+                    verification_status, verification_message, warnings_json, created_at, finished_at
+                )
+                VALUES (?, 'succeeded', ?, ?, ?, ?, 'verified', 'ok', '[]', ?, ?)
+                """,
+                (
+                    run_id,
+                    str(source_path),
+                    str(target_path),
+                    '["ffmpeg"]',
+                    "ffmpeg",
+                    now,
+                    now,
+                ),
+            )
+            published = transcode_manager.publish_item(
+                run_id,
+                item_id,
+                str(source_path),
+                str(target_path),
+                "REPLACE",
+            )
+            backup_path = Path(published["published_backup_path"])
+            self.assertEqual(source_path.read_bytes(), b"transcoded media bytes")
+            self.assertEqual(backup_path.read_bytes(), b"original media bytes")
+            self.assertTrue(backup_path.is_relative_to(CONFIG.transcoder.backup_dir))
+            self.assertEqual(list(media_dir.glob("*media-atlas-backup*")), [])
 
             with TestClient(app) as client:
                 live = client.get("/api/health/live")
