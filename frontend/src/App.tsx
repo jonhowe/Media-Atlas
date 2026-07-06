@@ -1077,6 +1077,12 @@ function planRemainingCount(plan: TranscodePlan) {
   return Math.max(0, itemCount - shown);
 }
 
+function canPublishItem(item: TranscodeRunItem) {
+  return item.status === "succeeded"
+    && item.verification_status === "verified"
+    && !item.published_at;
+}
+
 function Runs({ onToast }: { onToast: (message: string) => void }) {
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -1116,6 +1122,35 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
 
   async function showLog(runId: number, itemId: number) {
     setLog(await apiText(`/api/transcode-runs/${runId}/items/${itemId}/log`));
+  }
+
+  async function publishItem(runId: number, item: TranscodeRunItem) {
+    const firstConfirmed = window.confirm(
+      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\nMedia Atlas will move the original file to a backup path beside it, then copy the staged output into the original path.`
+    );
+    if (!firstConfirmed) return;
+    const phrase = window.prompt(
+      `Final confirmation required.\n\nThis replaces the live source file at:\n${item.source_path}\n\nType REPLACE to continue.`
+    );
+    if (phrase !== "REPLACE") {
+      onToast("Publish canceled.");
+      return;
+    }
+    try {
+      await api<TranscodeRunItem>(`/api/transcode-runs/${runId}/items/${item.id}/publish`, {
+        method: "POST",
+        body: JSON.stringify({
+          source_path: item.source_path,
+          target_path: item.target_path,
+          confirmation_text: phrase
+        })
+      });
+      await refreshRun(runId);
+      onToast("Published staged output. Original file was backed up.");
+    } catch (error) {
+      onToast(String(error));
+      await refreshRun(runId);
+    }
   }
 
   return (
@@ -1216,9 +1251,28 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                       <span>Duration {formatItemDuration(item)}</span>
                     </div>
                   </td>
-                  <td className="path">{item.target_path}</td>
-                  <td>{item.verification_status} {item.verification_message}</td>
-                  <td><button onClick={() => showLog(selected.id, item.id)}>Log</button></td>
+                  <td className="path">
+                    <strong>Staged</strong>
+                    <span>{item.target_path}</span>
+                    <strong>Original</strong>
+                    <span>{item.source_path}</span>
+                  </td>
+                  <td>
+                    <div className="statusGrid">
+                      <span>{item.verification_status} {item.verification_message}</span>
+                      {item.publish_status && (
+                        <span>
+                          <StatusBadge status={item.publish_status} /> {item.publish_message}
+                        </span>
+                      )}
+                      {item.published_at && <span className="muted">Published {formatDateTime(item.published_at)}</span>}
+                      {item.published_backup_path && <span className="muted">Backup {item.published_backup_path}</span>}
+                    </div>
+                  </td>
+                  <td className="rowActions">
+                    <button onClick={() => showLog(selected.id, item.id)}>Log</button>
+                    {canPublishItem(item) && <button className="danger" onClick={() => publishItem(selected.id, item)}>Publish</button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1747,7 +1801,7 @@ function Badge({ tone = "muted", children }: { tone?: string; children: ReactNod
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const tone = ["succeeded", "verified", "ok"].includes(status)
+  const tone = ["succeeded", "verified", "ok", "published"].includes(status)
     ? "good"
     : ["failed", "error", "verification_failed"].includes(status)
       ? "bad"

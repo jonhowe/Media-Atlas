@@ -358,6 +358,15 @@ label {
   overflow-wrap: anywhere;
 }
 
+.path strong,
+.path span {
+  display: block;
+}
+
+.path strong {
+  color: #475467;
+}
+
 .rowActions {
   display: flex;
   flex-wrap: wrap;

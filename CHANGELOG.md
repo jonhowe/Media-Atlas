@@ -8,6 +8,7 @@ This changelog summarizes the commits currently on `main`. New user-facing chang
 - Added guarded transcode plan deletion for plans that have never been run.
 - Hid archived transcode plans from the default planner view with a toggle to show archived plans.
 - Changed GHCR publishing to run only for published GitHub Releases.
+- Added a two-confirmation publish action for verified staged transcode outputs with original-file backup.
 
 ## Main Branch History
 

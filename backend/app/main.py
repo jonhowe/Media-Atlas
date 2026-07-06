@@ -93,6 +93,12 @@ class RunCreate(BaseModel):
     name: str | None = Field(default=None, max_length=180)
 
 
+class PublishRunItemRequest(BaseModel):
+    source_path: str = Field(min_length=1)
+    target_path: str = Field(min_length=1)
+    confirmation_text: str = Field(min_length=1)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -848,6 +854,20 @@ async def transcode_item_log(run_id: int, item_id: int) -> str:
         return ""
     text = Path(log_path).read_text(encoding="utf-8", errors="replace")
     return text[-20000:]
+
+
+@app.post("/api/transcode-runs/{run_id}/items/{item_id}/publish")
+async def publish_transcode_item(run_id: int, item_id: int, payload: PublishRunItemRequest) -> dict[str, Any]:
+    try:
+        return transcode_manager.publish_item(
+            run_id,
+            item_id,
+            payload.source_path,
+            payload.target_path,
+            payload.confirmation_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _inflate_root(row: dict[str, Any]) -> dict[str, Any]:

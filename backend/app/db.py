@@ -631,6 +631,15 @@ MIGRATIONS: list[tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_transcode_plans_archived ON transcode_plans(archived_at);
         """,
     ),
+    (
+        "0003_publish_transcode_items",
+        """
+        ALTER TABLE transcode_run_items ADD COLUMN published_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_status TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_message TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN published_backup_path TEXT;
+        """,
+    ),
 ]
 
 

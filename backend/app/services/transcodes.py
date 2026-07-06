@@ -146,6 +146,84 @@ class TranscodeManager:
         await self.ensure_worker()
         return db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,)) or {"id": run_id}
 
+    def publish_item(
+        self,
+        run_id: int,
+        item_id: int,
+        source_path: str,
+        target_path: str,
+        confirmation_text: str,
+    ) -> dict[str, Any]:
+        if confirmation_text != "REPLACE":
+            raise ValueError("Publish requires the confirmation text REPLACE.")
+        item = db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id))
+        if not item:
+            raise ValueError("Transcode run item not found.")
+        if item.get("published_at"):
+            raise ValueError("This transcode item has already been published.")
+        if item["status"] != "succeeded" or item.get("verification_status") != "verified":
+            raise ValueError("Only verified, successful transcode items can be published.")
+        if source_path != item["source_path"] or target_path != item["target_path"]:
+            raise ValueError("Submitted source or staged output path does not match the run item.")
+
+        source = Path(item["source_path"])
+        target = Path(item["target_path"])
+        if not _is_within(target, CONFIG.transcoder.staging_dir):
+            raise ValueError("Staged output path is outside the configured transcode staging directory.")
+        if not source.exists() or not source.is_file():
+            raise ValueError("Original source file is missing.")
+        if not target.exists() or not target.is_file() or target.stat().st_size == 0:
+            raise ValueError("Verified staged output is missing or empty.")
+        if source.resolve() == target.resolve():
+            raise ValueError("Source and staged output paths must be different.")
+        if not os.access(source, os.R_OK) or not os.access(source.parent, os.W_OK):
+            raise ValueError("Original source file is not readable or its directory is not writable. Check the media mount mode.")
+
+        backup_path = _publish_backup_path(source, run_id, item_id)
+        temp_path = _publish_temp_path(source, run_id, item_id)
+        now = db.utc_now()
+        try:
+            shutil.copy2(target, temp_path)
+            source.replace(backup_path)
+            try:
+                temp_path.replace(source)
+            except OSError:
+                if backup_path.exists() and not source.exists():
+                    backup_path.replace(source)
+                raise
+        except OSError as exc:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            message = f"Publish failed: {exc}"
+            db.execute(
+                """
+                UPDATE transcode_run_items
+                SET publish_status = 'failed',
+                    publish_message = ?
+                WHERE id = ?
+                """,
+                (message, item_id),
+            )
+            raise ValueError(message) from exc
+
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET published_at = ?,
+                publish_status = 'published',
+                publish_message = ?,
+                published_backup_path = ?
+            WHERE id = ?
+            """,
+            (
+                now,
+                "Published staged output to original source path. Original file was moved to backup.",
+                str(backup_path),
+                item_id,
+            ),
+        )
+        return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
+
     async def _worker_loop(self) -> None:
         while True:
             item = db.query_one(
@@ -467,6 +545,27 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _publish_backup_path(source: Path, run_id: int, item_id: int) -> Path:
+    suffix = db.utc_now().replace(":", "").replace("+", "Z")
+    base_name = f"{source.name}.media-atlas-backup-run-{run_id}-item-{item_id}-{suffix}"
+    candidate = source.with_name(base_name)
+    for index in range(1, 10_000):
+        if not candidate.exists():
+            return candidate
+        candidate = source.with_name(f"{base_name}-{index}")
+    raise ValueError(f"Could not find available backup path for {source}")
+
+
+def _publish_temp_path(source: Path, run_id: int, item_id: int) -> Path:
+    base_name = f".{source.name}.media-atlas-publish-run-{run_id}-item-{item_id}.tmp"
+    candidate = source.with_name(base_name)
+    for index in range(1, 10_000):
+        if not candidate.exists():
+            return candidate
+        candidate = source.with_name(f"{base_name}-{index}")
+    raise ValueError(f"Could not find available temporary publish path for {source}")
 
 
 def build_command(profile: dict[str, Any], source_path: str, target_path: str) -> list[str] | None:

@@ -2,9 +2,9 @@
 
 # Media Atlas
 
-Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs without modifying source media.
+Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs.
 
-Media Atlas never deletes, overwrites, replaces, or automatically mutates source media in the current production path. Transcode output is staged separately from originals.
+Media Atlas stages transcode output separately from originals by default. Replacing a source file is only available through an explicit manual publish action for verified outputs, requires two confirmations, and creates a same-directory backup of the original first.
 
 ## Capabilities
 
@@ -17,6 +17,7 @@ Media Atlas never deletes, overwrites, replaces, or automatically mutates source
 - Generate staged transcode plans from candidates.
 - Start and monitor one server-side transcode run at a time.
 - Close and reopen the browser while jobs continue, as long as the backend process remains running.
+- Manually publish verified staged outputs back to the original path after two confirmations.
 
 ## Production Install
 
@@ -152,7 +153,18 @@ Persistent app data is bind-mounted into the install directory:
 ./transcode-staging   staged transcode outputs
 ```
 
-Source media is mounted read-only. Staged transcode output is written separately.
+Source media is mounted read-only in the default Compose file. Staged transcode output is written separately. The manual publish action requires the media mount to be writable; keep the default read-only mount unless you intentionally want Media Atlas to replace originals.
+
+## Publishing Transcoded Outputs
+
+Completed transcode items can be published from Transcode Runs when the item succeeded and output verification passed. Publishing copies the staged output over the original source path after moving the original file to a same-directory `media-atlas-backup` filename.
+
+The UI requires two confirmations:
+
+1. Confirm that you want to publish the staged output to the original location.
+2. Type `REPLACE` to confirm replacement of the live source file.
+
+The backend also requires the exact source path, staged output path, and confirmation text before it will publish. Publish fails if the staged output is missing, the item is not verified, the item was already published, or the original file/location is not writable.
 
 ## First Run Checklist
 

@@ -294,5 +294,9 @@ export type TranscodeRunItem = {
   exit_code?: number | null;
   verification_status?: string | null;
   verification_message?: string | null;
+  published_at?: string | null;
+  publish_status?: string | null;
+  publish_message?: string | null;
+  published_backup_path?: string | null;
   warnings_json: string;
 };
