@@ -315,7 +315,9 @@ The current Docker Compose flow is workable, but these additions would make firs
 
 GitHub Actions publishes images to GHCR.
 
-- `ghcr.io/jonhowe/media-atlas:latest` tracks the latest published `main` build.
+- GHCR publishing runs only when a GitHub Release is published.
+- Pushing to `main` runs validation workflows but does not publish or retag the container image.
+- `ghcr.io/jonhowe/media-atlas:latest` tracks the latest published GitHub Release.
 - Release tags publish matching image tags, for example `ghcr.io/jonhowe/media-atlas:v0.1.0`.
 - Every published image also gets a commit-pinned `sha-<commit>` tag.
 - Builds use GitHub Actions layer caching, Trivy scanning, SBOM attestations, and provenance attestations.
