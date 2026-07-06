@@ -249,6 +249,7 @@ export type TranscodeRun = {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  current_item_id?: number | null;
   total_items: number;
   completed_items: number;
   failed_items: number;
@@ -266,6 +267,10 @@ export type TranscodeRunItem = {
   command_display: string;
   log_path?: string | null;
   progress_percent: number;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  time_seconds?: number | null;
   speed?: string | null;
   exit_code?: number | null;
   verification_status?: string | null;

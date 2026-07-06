@@ -15,7 +15,8 @@ import type {
   Summary,
   TranscodePlan,
   TranscodeProfile,
-  TranscodeRun
+  TranscodeRun,
+  TranscodeRunItem
 } from "./types";
 
 type Page =
@@ -852,6 +853,9 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
             <tr>
               <th>Name</th>
               <th>Status</th>
+              <th>Started</th>
+              <th>Stopped</th>
+              <th>Duration</th>
               <th>Progress</th>
               <th>Items</th>
               <th></th>
@@ -860,10 +864,32 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
           <tbody>
             {runs.map((run) => (
               <tr key={run.id}>
-                <td>{run.name}</td>
+                <td>
+                  <strong>{run.name}</strong>
+                  <div className="muted">Created {formatDateTime(run.created_at)}</div>
+                </td>
                 <td><StatusBadge status={run.status} /></td>
-                <td><Progress value={run.progress_percent} /></td>
-                <td>{run.completed_items}/{run.total_items} complete, {run.failed_items} failed</td>
+                <td>{formatDateTime(run.started_at)}</td>
+                <td>{formatStopDateTime(run.finished_at, run.status)}</td>
+                <td>{formatRunDuration(run)}</td>
+                <td>
+                  <div className="scanProgressCell">
+                    <div className="progressHeader">
+                      <strong>{Math.round(run.progress_percent || 0)}%</strong>
+                      {run.current_item_id && <span>item #{run.current_item_id}</span>}
+                    </div>
+                    <Progress value={run.progress_percent} />
+                    {run.message && <div className="muted">{run.message}</div>}
+                  </div>
+                </td>
+                <td>
+                  <div className="scanStats">
+                    <span><strong>{run.completed_items}</strong> complete</span>
+                    <span><strong>{run.failed_items}</strong> failed</span>
+                    <span><strong>{run.canceled_items}</strong> canceled</span>
+                    <span><strong>{run.total_items}</strong> total</span>
+                  </div>
+                </td>
                 <td className="rowActions">
                   <button onClick={() => setSelectedId(run.id)}>Open</button>
                   {["queued", "running"].includes(run.status) && <button onClick={() => cancel(run.id)}>Cancel</button>}
@@ -877,12 +903,19 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
       {selected && (
         <Panel title={`Run ${selected.id}: ${selected.name}`}>
           <p>{selected.message}</p>
+          <div className="metrics compact">
+            <Metric label="Created" value={formatDateTime(selected.created_at)} />
+            <Metric label="Started" value={formatDateTime(selected.started_at)} />
+            <Metric label="Stopped" value={formatStopDateTime(selected.finished_at, selected.status)} />
+            <Metric label="Duration" value={formatRunDuration(selected)} />
+          </div>
           <table>
             <thead>
               <tr>
                 <th>Item</th>
                 <th>Status</th>
                 <th>Progress</th>
+                <th>Timing</th>
                 <th>Target</th>
                 <th>Verification</th>
                 <th></th>
@@ -893,7 +926,23 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                 <tr key={item.id}>
                   <td>{item.id}</td>
                   <td><StatusBadge status={item.status} /></td>
-                  <td><Progress value={item.progress_percent} /></td>
+                  <td>
+                    <div className="scanProgressCell">
+                      <div className="progressHeader">
+                        <strong>{Math.round(item.progress_percent || 0)}%</strong>
+                        {item.speed && <span>{item.speed}</span>}
+                      </div>
+                      <Progress value={item.progress_percent} />
+                      {item.time_seconds != null && <div className="muted">encoded {formatElapsed(item.time_seconds * 1000)}</div>}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="scanTiming">
+                      <span>Started {formatDateTime(item.started_at)}</span>
+                      <span>Stopped {formatStopDateTime(item.finished_at, item.status)}</span>
+                      <span>Duration {formatItemDuration(item)}</span>
+                    </div>
+                  </td>
                   <td className="path">{item.target_path}</td>
                   <td>{item.verification_status} {item.verification_message}</td>
                   <td><button onClick={() => showLog(selected.id, item.id)}>Log</button></td>
@@ -1533,6 +1582,30 @@ function formatDateTime(value?: string | null) {
     hour: "numeric",
     minute: "2-digit"
   });
+}
+
+function formatStopDateTime(value?: string | null, status?: string) {
+  if (value) return formatDateTime(value);
+  if (status === "running") return "Running";
+  if (status === "queued") return "Not started";
+  return "Not stopped";
+}
+
+function formatRunDuration(run: TranscodeRun) {
+  return formatDurationBetween(run.started_at, run.finished_at, run.status === "running");
+}
+
+function formatItemDuration(item: TranscodeRunItem) {
+  return formatDurationBetween(item.started_at, item.finished_at, item.status === "running");
+}
+
+function formatDurationBetween(start?: string | null, end?: string | null, live = false) {
+  if (!start) return "Not started";
+  const startMs = new Date(start).getTime();
+  if (Number.isNaN(startMs)) return "Unknown";
+  const endMs = end ? new Date(end).getTime() : live ? Date.now() : undefined;
+  if (!endMs || Number.isNaN(endMs)) return "Not stopped";
+  return formatElapsed(Math.max(0, endMs - startMs));
 }
 
 function formatElapsed(milliseconds: number) {
