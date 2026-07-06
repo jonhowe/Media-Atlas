@@ -44,6 +44,8 @@ class TranscodeManager:
         plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
         if not plan:
             raise ValueError("Transcode plan not found.")
+        if plan.get("archived_at"):
+            raise ValueError("Archived transcode plans cannot be started. Unarchive the plan first.")
         items = db.query_all("SELECT * FROM transcode_plan_items WHERE plan_id = ? ORDER BY id", (plan_id,))
         runnable = [item for item in items if item.get("command_json")]
         if not runnable:

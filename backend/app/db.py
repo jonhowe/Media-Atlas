@@ -624,6 +624,13 @@ CREATE INDEX IF NOT EXISTS idx_plex_file_matches_status ON plex_file_matches(mat
 
 MIGRATIONS: list[tuple[str, str]] = [
     ("0001_initial_schema", SCHEMA),
+    (
+        "0002_archive_transcode_plans",
+        """
+        ALTER TABLE transcode_plans ADD COLUMN archived_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_transcode_plans_archived ON transcode_plans(archived_at);
+        """,
+    ),
 ]
 
 

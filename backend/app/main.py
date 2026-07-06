@@ -682,14 +682,16 @@ async def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-plans")
-async def list_transcode_plans() -> list[dict[str, Any]]:
+async def list_transcode_plans(include_archived: bool = False) -> list[dict[str, Any]]:
+    archive_filter = "" if include_archived else "WHERE tp.archived_at IS NULL"
     plans = db.query_all(
-        """
+        f"""
         SELECT tp.*, p.name AS profile_name,
                (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id) AS item_count,
                (SELECT COUNT(*) FROM transcode_runs WHERE plan_id = tp.id) AS run_count
         FROM transcode_plans tp
         LEFT JOIN transcode_profiles p ON p.id = tp.profile_id
+        {archive_filter}
         ORDER BY tp.id DESC
         """
     )
@@ -719,6 +721,45 @@ async def list_transcode_plans() -> list[dict[str, Any]]:
             (plan["id"],),
         )
     return plans
+
+
+@app.post("/api/transcode-plans/{plan_id}/archive")
+async def archive_transcode_plan(plan_id: int) -> dict[str, Any]:
+    plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
+    if not plan:
+        raise HTTPException(status_code=404, detail="Transcode plan not found.")
+    db.execute(
+        "UPDATE transcode_plans SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?",
+        (db.utc_now(), db.utc_now(), plan_id),
+    )
+    return await read_transcode_plan(plan_id)
+
+
+@app.post("/api/transcode-plans/{plan_id}/unarchive")
+async def unarchive_transcode_plan(plan_id: int) -> dict[str, Any]:
+    plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
+    if not plan:
+        raise HTTPException(status_code=404, detail="Transcode plan not found.")
+    db.execute(
+        "UPDATE transcode_plans SET archived_at = NULL, updated_at = ? WHERE id = ?",
+        (db.utc_now(), plan_id),
+    )
+    return await read_transcode_plan(plan_id)
+
+
+@app.delete("/api/transcode-plans/{plan_id}")
+async def delete_transcode_plan(plan_id: int) -> dict[str, Any]:
+    plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
+    if not plan:
+        raise HTTPException(status_code=404, detail="Transcode plan not found.")
+    run_count = db.query_one("SELECT COUNT(*) AS count FROM transcode_runs WHERE plan_id = ?", (plan_id,))
+    if run_count and run_count["count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Plans with transcode run history cannot be deleted. Archive the plan instead.",
+        )
+    db.execute("DELETE FROM transcode_plans WHERE id = ?", (plan_id,))
+    return {"deleted": True, "id": plan_id}
 
 
 @app.get("/api/transcode-plans/{plan_id}")

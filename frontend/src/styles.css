@@ -428,6 +428,16 @@ label {
   width: auto;
 }
 
+.inlineCheck {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.inlineCheck input {
+  width: auto;
+}
+
 .mappingRow {
   align-items: center;
   display: grid;

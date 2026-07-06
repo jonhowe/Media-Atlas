@@ -31,6 +31,7 @@ class ProductionSmokeTest(unittest.TestCase):
             db.init_db()
             self.assertTrue(db.migration_status()["ok"])
             self.assertIn("0001_initial_schema", db.migration_status()["applied"])
+            self.assertIn("0002_archive_transcode_plans", db.migration_status()["applied"])
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
             self.assertTrue(

@@ -226,6 +226,7 @@ export type TranscodePlan = {
   profile_name?: string;
   status: string;
   created_at: string;
+  archived_at?: string | null;
   item_count?: number;
   items?: TranscodePlanItem[];
   sample_items?: TranscodePlanItem[];

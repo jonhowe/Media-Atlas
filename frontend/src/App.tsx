@@ -836,15 +836,16 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [profileId, setProfileId] = useState<number>(0);
   const [name, setName] = useState("MVP transcode plan");
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [showArchived]);
 
   async function refresh() {
     const [nextProfiles, nextPlans, candidates] = await Promise.all([
       api<TranscodeProfile[]>("/api/transcode-profiles"),
-      api<TranscodePlan[]>("/api/transcode-plans"),
+      api<TranscodePlan[]>(`/api/transcode-plans${showArchived ? "?include_archived=true" : ""}`),
       api<{ items: MediaFile[] }>("/api/media?recommendation_category=Easy%20Win&page_size=100&sort=size_bytes&direction=desc")
     ]);
     setProfiles(nextProfiles);
@@ -886,12 +887,50 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
     }
   }
 
+  async function archivePlan(plan: TranscodePlan) {
+    if (!window.confirm(`Archive "${plan.name}"? It will be hidden from the default planner view, but run history is preserved.`)) return;
+    try {
+      await api(`/api/transcode-plans/${plan.id}/archive`, { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Transcode plan archived.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function unarchivePlan(plan: TranscodePlan) {
+    try {
+      await api(`/api/transcode-plans/${plan.id}/unarchive`, { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Transcode plan restored.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function deletePlan(plan: TranscodePlan) {
+    if (!window.confirm(`Delete "${plan.name}"? This removes the plan and its planned items. Source media and staged outputs are untouched.`)) return;
+    try {
+      await api(`/api/transcode-plans/${plan.id}`, { method: "DELETE" });
+      await refresh();
+      onToast("Transcode plan deleted.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
   return (
     <section className="stack">
       <Panel title="Existing Plans">
         <div className="panelIntro">
           <p className="muted">Review planned files and run history before starting another staged transcode run.</p>
-          <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
+          <div className="rowActions">
+            <label className="inlineCheck">
+              <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              Show archived
+            </label>
+            <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
+          </div>
         </div>
         <table>
           <thead>
@@ -908,7 +947,10 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
               <tr key={plan.id}>
                 <td>
                   <strong>{plan.name}</strong>
-                  <div className="muted">{plan.profile_name || "Unknown profile"} · {plan.status}</div>
+                  <div className="muted">
+                    {plan.profile_name || "Unknown profile"} · {plan.status}
+                    {plan.archived_at ? ` · archived ${formatDateTime(plan.archived_at)}` : ""}
+                  </div>
                 </td>
                 <td>{formatDateTime(plan.created_at)}</td>
                 <td>
@@ -926,7 +968,15 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
                 <td className="rowActions">
                   <a className="button" href={`/api/transcode-plans/${plan.id}/download.csv`}>CSV</a>
                   <a className="button" href={`/api/transcode-plans/${plan.id}/download.sh`}>Script</a>
-                  <button onClick={() => startRun(plan)}>Start run</button>
+                  {plan.archived_at ? (
+                    <button onClick={() => unarchivePlan(plan)}>Unarchive</button>
+                  ) : (
+                    <>
+                      <button onClick={() => startRun(plan)}>Start run</button>
+                      <button onClick={() => archivePlan(plan)}>Archive</button>
+                    </>
+                  )}
+                  {!plan.run_count && <button className="danger" onClick={() => deletePlan(plan)}>Delete</button>}
                 </td>
               </tr>
             ))}
