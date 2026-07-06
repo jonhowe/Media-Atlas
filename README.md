@@ -29,7 +29,21 @@ mkdir -p ~/media-atlas
 cd ~/media-atlas
 ```
 
-Create `.env`:
+Download the example Compose and environment files:
+
+```bash
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/jonhowe/Media-Atlas/main/docker-compose.yml
+curl -fsSLo .env https://raw.githubusercontent.com/jonhowe/Media-Atlas/main/.env.docker.example
+```
+
+Edit `.env` and set at least:
+
+- `MEDIA_ATLAS_MEDIA_ROOT` to the host path that contains your media.
+- `MEDIA_ATLAS_ADMIN_PASSWORD` to a real password.
+- `MEDIA_ATLAS_SESSION_SECRET` to a long random value.
+- `MEDIA_ATLAS_ALLOWED_ORIGINS` to the browser origin you will use, for example `http://192.168.1.106:8000`.
+
+You can also create the files manually. A minimal `.env` looks like this:
 
 ```bash
 MEDIA_ATLAS_PORT=8000
@@ -42,7 +56,7 @@ MEDIA_ATLAS_ADMIN_PASSWORD=replace-this-password
 MEDIA_ATLAS_SESSION_SECRET=replace-this-with-a-long-random-secret
 ```
 
-Create `docker-compose.yml`:
+A matching `docker-compose.yml` looks like this:
 
 ```yaml
 services:
@@ -138,103 +152,68 @@ Persistent app data is bind-mounted into the install directory:
 
 Source media is mounted read-only. Staged transcode output is written separately.
 
+## First Run Checklist
+
+After the container is running:
+
+1. Open the UI and log in with `MEDIA_ATLAS_ADMIN_USERNAME` and `MEDIA_ATLAS_ADMIN_PASSWORD`.
+2. Add media roots using container paths such as `/media`, `/media/Movies`, or `/media/TV`.
+3. Start a scan from the Scans page and watch progress from the dashboard or scan detail view.
+4. Optional: configure Plex in Settings, add path mappings from Plex host paths to container paths, then run a manual Plex sync.
+5. Review Library, Candidates, Reports, and Transcode Planner before starting staged transcode runs.
+
 ## Transcode Profiles
 
-Media Atlas generates only app-defined `ffmpeg` commands. The production image includes several staged-output profiles:
+Media Atlas includes remux, software HEVC, hardware HEVC, H.264 compatibility, and manual-review profiles. `HEVC Archive Fast` is the recommended default software encode profile; hardware profiles require host/container device support.
 
-| Profile | Encoder | Relative speed | Use case |
-| --- | --- | --- | --- |
-| Remux to MKV | stream copy | Very fast | Container changes without re-encoding. |
-| HEVC Archive Balanced | `libx265 -crf 20 -preset medium` | Slow | Maximum compression and quality. |
-| HEVC Archive Fast | `libx265 -crf 21 -preset fast` | Medium | Recommended default for most archival conversions. |
-| HEVC Archive Faster | `libx265 -crf 22 -preset faster` | Fast | Bulk conversions where larger outputs are acceptable. |
-| HEVC Quick Sync | `hevc_qsv -global_quality 24` | Very fast | Intel iGPU/Quick Sync hosts. |
-| HEVC NVENC | `hevc_nvenc -cq 24 -preset p5` | Very fast | NVIDIA GPU hosts. |
-| HEVC VAAPI | `hevc_vaapi -qp 24` | Very fast | Linux VAAPI hosts, usually Intel or AMD. |
-| H.264 Compatibility | `libx264 -crf 20 -preset slow` | Medium | MP4 compatibility outputs. |
-
-The hardware profiles are optional. They remain visible because the same image can run on different hosts, but they will fail preflight or `ffmpeg` execution if the container does not have access to the required device/driver stack.
-
-For VAAPI or Intel Quick Sync on Linux, add device access to `docker-compose.yml`:
-
-```yaml
-services:
-  media-atlas:
-    devices:
-      - /dev/dri:/dev/dri
-```
-
-For NVIDIA NVENC, install the NVIDIA Container Toolkit on the host and add:
-
-```yaml
-services:
-  media-atlas:
-    gpus: all
-```
-
-Useful CPU checks:
-
-```bash
-docker stats media-atlas
-docker exec -it media-atlas nproc
-docker inspect media-atlas
-```
-
-If `libx265` logs messages such as `No thread pool allocated`, check container CPU limits first. If the container sees the expected CPUs and x265 still underutilizes the host, compare the Fast and Faster profiles before adding encoder-specific threading parameters.
+See [Transcode Profiles](docs/TRANSCODE_PROFILES.md) for the full profile table, GPU/VAAPI Compose snippets, CPU checks, and x265 tuning notes.
 
 ## Configuration Reference
 
 Configuration is environment-variable based. In Docker, variables in `.env` are consumed by `docker-compose.yml`; only variables listed under `environment` are passed into the container.
 
-### Compose Variables
-
-| Variable | Belongs in | Required | Default | Purpose |
-| --- | --- | --- | --- | --- |
-| `MEDIA_ATLAS_IMAGE` | `.env` | No | `ghcr.io/jonhowe/media-atlas:latest` | Image tag to run. Use a release tag for production when available. |
-| `MEDIA_ATLAS_PORT` | `.env` | No | `8000` | Host port mapped to container port `8000`. |
-| `MEDIA_ATLAS_MEDIA_ROOT` | `.env` | Yes | none | Host media path mounted read-only at `/media`. |
-| `MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT` | `.env` plus a custom Compose volume line | No | none | Optional host path if you choose to mount staged outputs somewhere other than `./transcode-staging`. |
-
-### Application Variables
-
-| Variable | Belongs in | Docker default | Local/default value | Purpose |
-| --- | --- | --- | --- | --- |
-| `MEDIA_ATLAS_HOST` | `docker-compose.yml`; local shell/env file | `0.0.0.0` | `127.0.0.1` | Backend bind host. Docker should use `0.0.0.0`; local dev should usually use loopback. |
-| `MEDIA_ATLAS_PORT` | `docker-compose.yml`; local shell/env file | `8000` | `8000` | Backend port inside the container or local process. |
-| `MEDIA_ATLAS_BASE_DIR` | Optional local env var | not used | repository root | Base path used to derive default data/report/log/staging directories. |
-| `MEDIA_ATLAS_DATA_DIR` | `docker-compose.yml`; optional local env var | `/app/data` | `./data` | Directory containing SQLite data by default. |
-| `MEDIA_ATLAS_DATABASE_PATH` | Optional env var | `/app/data/media_inventory.sqlite` | `DATA_DIR/media_inventory.sqlite` | Full SQLite database path. Usually leave unset. |
-| `MEDIA_ATLAS_REPORTS_DIR` | `docker-compose.yml`; optional local env var | `/app/reports` | `./reports` | Report output directory. |
-| `MEDIA_ATLAS_LOGS_DIR` | `docker-compose.yml`; optional local env var | `/app/logs` | `./logs` | App and transcode log directory. |
-| `MEDIA_ATLAS_TRANSCODE_STAGING_DIR` | `docker-compose.yml`; optional local env var | `/app/transcode-staging` | `./transcode-staging` | Staged transcode output directory. |
-| `MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS` | `.env` via `docker-compose.yml`; optional local env var | `/media` | existing paths among home, `/mnt`, `/media`, `/Volumes`, repo root | Comma-separated roots available to the server-side directory browser. Use container paths in Docker. |
-| `MEDIA_ATLAS_ALLOW_LAN` | Optional env var | `true` because Docker binds `0.0.0.0` | `false` when bound to loopback | Informational LAN mode flag. |
-| `MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED` | `.env` via `docker-compose.yml`; optional local env var | `true` | `true` | Enables the server-side directory browser. |
-| `MEDIA_ATLAS_FFPROBE_PATH` | Docker image default; optional local env var | `ffprobe` | `ffprobe` | Path or command name for `ffprobe`. |
-| `MEDIA_ATLAS_FFMPEG_PATH` | Docker image default; optional local env var | `ffmpeg` | `ffmpeg` | Path or command name for `ffmpeg`. |
-| `MEDIA_ATLAS_SCAN_CONCURRENCY` | `.env` via `docker-compose.yml`; optional local env var | `2` | `2` | Maximum concurrent `ffprobe` tasks. |
-| `MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS` | `.env` via `docker-compose.yml`; optional local env var | `60` | `60` | Per-file `ffprobe` timeout; minimum is `5`. |
-| `MEDIA_ATLAS_MARK_MISSING_FILES` | `.env` via `docker-compose.yml`; optional local env var | `true` | `true` | Marks previously scanned files missing when a root is available but a file is gone. |
-| `MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS` | `.env` via `docker-compose.yml`; optional local env var | `0` | `0` | Global `ffmpeg` timeout. `0` means no timeout. |
-| `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS` | `.env` via `docker-compose.yml`; optional local env var | `3` | `3` | Minimum duration tolerance for output verification. |
-| `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT` | `.env` via `docker-compose.yml`; optional local env var | `0.02` | `0.02` | Percent duration tolerance for output verification. |
-| `MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES` | `.env` via `docker-compose.yml`; optional local env var | `1073741824` | `1073741824` | Minimum free bytes required on the staging filesystem before starting an item. |
-| `MEDIA_ATLAS_AUTH_MODE` | `.env` via `docker-compose.yml`; optional local env var | `single_admin` | `disabled` | Access mode: `disabled`, `single_admin`, or `reverse_proxy_trusted`. |
-| `MEDIA_ATLAS_ADMIN_USERNAME` | `.env` via `docker-compose.yml`; optional local env var | `admin` | `admin` | Username for `single_admin` mode. |
-| `MEDIA_ATLAS_ADMIN_PASSWORD` | `.env` via `docker-compose.yml`; optional local env var | empty | empty | Password for `single_admin` mode. Required when that mode is enabled. |
-| `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` | Optional env var | empty | empty | Optional PBKDF2 password hash in `pbkdf2_sha256$iterations$salt$hash` format. |
-| `MEDIA_ATLAS_SESSION_SECRET` | `.env` via `docker-compose.yml`; optional local env var | empty | empty | HMAC secret for signed admin session cookies. Set a long random value in production. |
-| `MEDIA_ATLAS_SESSION_TTL_SECONDS` | Optional env var | `43200` | `43200` | Admin session lifetime. Minimum is `300`. |
-| `MEDIA_ATLAS_SESSION_COOKIE_SECURE` | `.env` via `docker-compose.yml`; optional local env var | `false` | `false` | Set `true` when serving Media Atlas over HTTPS. |
-| `MEDIA_ATLAS_TRUSTED_USER_HEADER` | Optional env var | `X-Forwarded-User` | `X-Forwarded-User` | Header trusted in `reverse_proxy_trusted` auth mode. Only use behind a trusted proxy that strips client-supplied values. |
-| `MEDIA_ATLAS_ALLOWED_ORIGINS` | `.env` via `docker-compose.yml`; optional local env var | loopback origins | loopback origins | Comma-separated CORS origins for browser clients. Same-origin production installs usually need no extra origins. |
-| `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN` | `.env` via `docker-compose.yml`; optional local env var | `false` | `false` | Explicit acknowledgement for binding `0.0.0.0` with auth disabled on a trusted LAN/VPN. |
-| `MEDIA_ATLAS_FAIL_UNSAFE_BIND` | Optional env var | `false` | `false` | If `true`, startup fails instead of only warning for unsafe all-interface/no-auth config. |
-| `MEDIA_ATLAS_READINESS_MIN_FREE_BYTES` | Optional env var | `268435456` | `268435456` | Minimum free bytes required for readiness disk checks. |
-| `MEDIA_ATLAS_LOG_RETENTION_DAYS` | `.env` via `docker-compose.yml`; optional local env var | `30` | `30` | Deletes old app/transcode log files during retention cleanup. |
-| `MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS` | `.env` via `docker-compose.yml`; optional local env var | `0` | `0` | Deletes old quarantined partial retry outputs when greater than `0`; completed staged outputs are not removed automatically. |
-| `MEDIA_ATLAS_PLEX_URL` | Optional `.env` via `docker-compose.yml`; optional local env var | empty | empty | Optional default Plex server URL. Can also be configured in Settings. |
-| `MEDIA_ATLAS_PLEX_TOKEN` | Optional `.env` via `docker-compose.yml`; optional local env var | empty | empty | Optional default Plex token. Can also be configured in Settings; never returned in full by the API. |
+| Variable | Short description | Set ideally | Details |
+| --- | --- | --- | --- |
+| `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN` | Acknowledge no-auth LAN bind | `.env` | Set to `true` only when `MEDIA_ATLAS_HOST=0.0.0.0` and `MEDIA_ATLAS_AUTH_MODE=disabled` are intentional for a trusted LAN/VPN. Without it, readiness warns. Default: `false`. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD` | Admin password | `.env` | Password used by `single_admin` auth mode. Required for production if `MEDIA_ATLAS_AUTH_MODE=single_admin` unless `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` is used. Do not commit real values. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` | Admin password hash | advanced env or secret manager | Optional PBKDF2 hash in `pbkdf2_sha256$iterations$salt$hash` format. Use this instead of `MEDIA_ATLAS_ADMIN_PASSWORD` if you do not want the cleartext password in `.env`. |
+| `MEDIA_ATLAS_ADMIN_USERNAME` | Admin username | `.env` | Username for `single_admin` auth mode. Default: `admin`. |
+| `MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS` | Directory browser roots | `.env` | Comma-separated list of server-visible root paths the UI directory browser may browse. In Docker, use container paths such as `/media`, not host paths such as `/mnt/media`. Default in Compose: `/media`. |
+| `MEDIA_ATLAS_ALLOWED_ORIGINS` | CORS origins | `.env` | Comma-separated browser origins allowed for API calls. Same-origin Docker installs usually use `http://127.0.0.1:8000,http://localhost:8000`; reverse proxy installs should include the HTTPS origin. |
+| `MEDIA_ATLAS_ALLOW_LAN` | LAN mode hint | advanced env | Informational flag derived from the bind host unless overridden. It is not the main security control; use auth settings for access control. |
+| `MEDIA_ATLAS_AUTH_MODE` | Access mode | `.env` | Access mode for UI/API. Supported values: `disabled`, `single_admin`, `reverse_proxy_trusted`. Recommended Docker default: `single_admin`. Local development default: `disabled`. |
+| `MEDIA_ATLAS_BASE_DIR` | Local default base path | local dev `.env` | Base path used to derive default local `data`, `reports`, `logs`, and `transcode-staging` directories. Usually not used in Docker because explicit container paths are set. |
+| `MEDIA_ATLAS_DATABASE_PATH` | SQLite database file | advanced env | Full SQLite path. Usually leave unset so the app uses `MEDIA_ATLAS_DATA_DIR/media_inventory.sqlite`. Useful only for unusual layouts or migration testing. |
+| `MEDIA_ATLAS_DATA_DIR` | App data directory | `docker-compose.yml` environment | Directory containing SQLite data and backups. Docker default: `/app/data`, normally bind-mounted to `./data`. |
+| `MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED` | Enable directory browser | `.env` | Enables or disables the server-side directory browser. Set `false` if you want users to type root paths manually. Default: `true`. |
+| `MEDIA_ATLAS_FAIL_UNSAFE_BIND` | Fail unsafe no-auth bind | advanced env | If `true`, startup fails when bound to all interfaces with auth disabled and no acknowledgement. If `false`, readiness reports a warning instead. Default: `false`. |
+| `MEDIA_ATLAS_FFMPEG_PATH` | `ffmpeg` command path | advanced env | Command or absolute path used for transcode execution. Docker image default: `ffmpeg`. Local installs require it on `PATH` unless overridden. |
+| `MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS` | Transcode timeout | `.env` | Global `ffmpeg` timeout for each item. `0` means no timeout, which is the normal default for long encodes. |
+| `MEDIA_ATLAS_FFPROBE_PATH` | `ffprobe` command path | advanced env | Command or absolute path used for media metadata probing and output verification. Docker image default: `ffprobe`. |
+| `MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS` | Probe timeout | `.env` | Per-file `ffprobe` timeout during scans. Minimum enforced value is `5`. Default: `60`. |
+| `MEDIA_ATLAS_HOST` | Backend bind host | `docker-compose.yml` environment | Backend bind address. Docker should use `0.0.0.0` so port publishing works. Local development should usually use `127.0.0.1`. |
+| `MEDIA_ATLAS_IMAGE` | Container image tag | `.env` | Compose-only variable used by `docker-compose.yml` to choose the GHCR image. Use `latest` for convenience or a pinned release tag for production rollback safety. |
+| `MEDIA_ATLAS_LOG_RETENTION_DAYS` | Log retention days | `.env` | Number of days to keep old app/transcode log files when retention cleanup runs. Set `0` to disable log deletion. Default: `30`. |
+| `MEDIA_ATLAS_LOGS_DIR` | Logs directory | `docker-compose.yml` environment | Directory for app and transcode logs. Docker default: `/app/logs`, normally bind-mounted to `./logs`. |
+| `MEDIA_ATLAS_MARK_MISSING_FILES` | Mark missing files | `.env` | If `true`, rescans mark previously seen files as missing when the root is available but the file is gone. Unavailable roots are skipped so whole libraries are not marked missing accidentally. |
+| `MEDIA_ATLAS_MEDIA_ROOT` | Host media root | `.env` | Compose-only variable for the host path mounted read-only into the container at `/media`. Required for normal Docker installs. |
+| `MEDIA_ATLAS_PLEX_TOKEN` | Plex token default | `.env` or UI Settings | Optional default Plex token. It can also be saved from the Settings page. The API returns only redacted token state. |
+| `MEDIA_ATLAS_PLEX_URL` | Plex server URL default | `.env` or UI Settings | Optional default Plex server URL, for example `http://192.168.1.106:32400`. It can also be saved from the Settings page. |
+| `MEDIA_ATLAS_PORT` | HTTP port | `.env` and `docker-compose.yml` | In `.env`, controls the host port published by Compose. Inside the container, Compose passes `8000` as the application port. Local dev can set this directly. |
+| `MEDIA_ATLAS_READINESS_MIN_FREE_BYTES` | Readiness disk threshold | advanced env | Minimum free bytes required for readiness disk checks. Default: `268435456` bytes. This is separate from transcode preflight free-space checks. |
+| `MEDIA_ATLAS_REPORTS_DIR` | Reports directory | `docker-compose.yml` environment | Directory for generated reports/exports. Docker default: `/app/reports`, normally bind-mounted to `./reports`. |
+| `MEDIA_ATLAS_SCAN_CONCURRENCY` | Scan concurrency | `.env` | Maximum concurrent `ffprobe` tasks during scans. Default: `2`. Increase carefully on slow disks or network mounts. |
+| `MEDIA_ATLAS_SESSION_COOKIE_NAME` | Session cookie name | advanced env | Cookie name for signed admin sessions. Default: `media_atlas_session`. Change only if you run multiple Media Atlas instances on the same browser origin. |
+| `MEDIA_ATLAS_SESSION_COOKIE_SECURE` | Secure cookie flag | `.env` | Set to `true` when serving Media Atlas over HTTPS. Keep `false` for plain HTTP LAN testing. |
+| `MEDIA_ATLAS_SESSION_SECRET` | Session signing secret | `.env` | HMAC secret for signed admin session cookies. Set a long random value in production. If omitted, sessions use an ephemeral secret and reset on restart. |
+| `MEDIA_ATLAS_SESSION_TTL_SECONDS` | Session lifetime | advanced env | Admin session lifetime in seconds. Minimum enforced value is `300`. Default: `43200`. |
+| `MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS` | Partial output retention | `.env` | Deletes old quarantined partial retry outputs when greater than `0`. Completed staged outputs are not removed automatically. Default: `0`. |
+| `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT` | Verification tolerance percent | `.env` | Percent-based duration tolerance for output verification. Default: `0.02`. The app uses the larger of this value and the seconds tolerance. |
+| `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS` | Verification tolerance seconds | `.env` | Minimum absolute duration tolerance for output verification. Default: `3`. |
+| `MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES` | Transcode free-space floor | `.env` | Minimum free bytes required on the staging filesystem before starting a transcode item. Default: `1073741824` bytes. |
+| `MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT` | Alternate staging host path | `.env` with Compose edit | Compose-only helper for mounting staged output somewhere other than `./transcode-staging`. Requires uncommenting/adding the matching volume line in `docker-compose.yml`. |
+| `MEDIA_ATLAS_TRANSCODE_STAGING_DIR` | Staged output directory | `docker-compose.yml` environment | Container/app path for staged transcode outputs. Docker default: `/app/transcode-staging`, normally bind-mounted to `./transcode-staging`. |
+| `MEDIA_ATLAS_TRUSTED_USER_HEADER` | Trusted proxy user header | reverse proxy env | Header trusted in `reverse_proxy_trusted` auth mode. Use only behind a proxy that authenticates users and strips any client-supplied copy. Default: `X-Forwarded-User`. |
 
 Plex path mappings are configured in the Settings page, not by environment variable. In Docker, map Plex paths to container paths, for example `/mnt/media` to `/media`.
 
@@ -313,35 +292,22 @@ MEDIA_ATLAS_ALLOWED_ORIGINS=https://media-atlas.example.internal
 
 If the proxy provides authentication, use `MEDIA_ATLAS_AUTH_MODE=reverse_proxy_trusted` and configure `MEDIA_ATLAS_TRUSTED_USER_HEADER`. The proxy must remove any incoming user identity header from clients before adding its own.
 
-## Development Install
+## Development
 
-Local development requires Python 3.12+, Node.js 20+, and `ffmpeg`/`ffprobe` on `PATH`.
+Source-based development setup is documented separately to keep the normal install path focused on GHCR and Docker Compose.
 
-```bash
-git clone git@github.com:jonhowe/Media-Atlas.git
-cd Media-Atlas
-cp .env.example .env
-```
+See [Development Install](docs/DEVELOPMENT.md).
 
-Backend:
+## Suggested Setup Improvements
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ../.env
-```
+The current Docker Compose flow is workable, but these additions would make first-time setup smoother:
 
-Frontend:
-
-```bash
-cd ../frontend
-npm install
-npm run dev
-```
-
-Open the Vite URL, usually `http://127.0.0.1:5173`.
+- Add a generated `.env` helper or `install.sh` that prompts for media root, admin password, session secret, host port, and optional Plex URL.
+- Add a first-run setup page that writes app settings for Plex URL/token and path mappings after authentication is configured.
+- Add a config validation command inside the container that prints missing required values, writable path checks, mounted media visibility, and auth mode warnings.
+- Publish a minimal `compose.yaml` plus a fuller `compose.example.yaml` for VAAPI/NVENC/reverse-proxy variants.
+- Add a README quick-start checklist with screenshots for adding a media root, running the first scan, configuring Plex path mappings, and starting the first staged transcode.
+- Add an in-app "copy diagnostics" button on Admin Status that redacts secrets and summarizes version, paths, mounts, tool availability, and recent failures.
 
 ## Publishing
 
