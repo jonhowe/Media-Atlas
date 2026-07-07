@@ -1,18 +1,45 @@
 # Changelog
 
-This changelog summarizes the commits currently on `main`. New user-facing changes should be added under `Unreleased` before they are released.
+This changelog summarizes released commits on `main` plus current unreleased branch work. New user-facing changes should be added under `Unreleased` before they are released.
 
 ## Unreleased
 
-- Added transcode run cleanup for published items, including staged-output deletion, backup deletion, per-item cleanup status, and archive-on-success behavior.
-- Added transcode run archive/unarchive controls and hid archived runs by default.
-- Added transcode savings tracking with before/after file sizes, cumulative runtime, run/item counts, and total space saved.
-- Added Intel iHD VAAPI runtime packages, `vainfo`, hardware-transcode verification docs, and image smoke checks for Linux Intel VAAPI / Quick Sync hosts.
-- Replaced the light/dark text toggle with icon-only sun/moon controls.
+- Clarified Intel Linux hardware-transcoding guidance to recommend `HEVC VAAPI` first when `/dev/dri` and the Intel iHD driver are available.
+- Documented that `HEVC Quick Sync` / `hevc_qsv` may still fail depending on FFmpeg QSV runtime support, even when VAAPI works.
 
 ## Main Branch History
 
+### 2026-07-07
+
+#### `8a83c84` (`v0.7`) - Add Intel iHD VAAPI support
+
+- Added Intel iHD VAAPI/media runtime packages, `vainfo`, VA-API libraries, and oneVPL/QSV runtime libraries to the Docker image.
+- Set the container default `LIBVA_DRIVER_NAME=iHD` for Intel iGPUs, including Raptor Lake and newer.
+- Added image smoke checks for `vainfo`, `iHD_drv_video.so`, FFmpeg/ffprobe, and the iHD driver environment.
+- Updated Docker Compose comments, README configuration docs, and transcode profile docs for `/dev/dri`, Intel VAAPI verification, and NVENC requirements.
+
+#### `1e1ab7d` (`v0.6`) - Add transcode savings tracking
+
+- Added source/output byte tracking for transcode run items.
+- Added `/api/transcode-runs/stats` with cumulative run count, item count, runtime, before/after size, and total space saved.
+- Added Dashboard and Transcode Runs savings panels.
+- Added per-run and per-item before/after/saved details.
+- Updated tests and README coverage for savings tracking.
+
+#### `66be1e0` (`v0.5`) - Add transcode run cleanup and archiving
+
+- Added cleanup for published transcode items, including staged-output deletion and backup deletion.
+- Added per-item cleanup status, cleanup messages, cleanup timestamps, staged deletion timestamps, and backup deletion timestamps.
+- Added transcode run archive/unarchive actions and hid archived runs by default.
+- Added a guarded cleanup flow that requires confirmation plus typing `DELETE ARTIFACTS`.
+- Replaced the light/dark text toggle with icon-only sun/moon controls.
+
 ### 2026-07-06
+
+#### `e7e9ba4` - Update changelog structure
+
+- Added the current changelog structure with an `Unreleased` section and backfilled main branch history through `v0.4`.
+- Documented the transcode plan archive/unarchive and guarded delete work already present on `main`.
 
 #### `63bdf7d` (`v0.4`) - Add publish progress details and theme toggle
 
