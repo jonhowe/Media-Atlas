@@ -28,7 +28,7 @@ Media Atlas generates only app-defined `ffmpeg` commands. Users can choose from 
 
 Hardware profiles are optional. They remain visible because the same image can run on different hosts, but they require host and container device support.
 
-For VAAPI or Intel Quick Sync on Linux, add device access to `docker-compose.yml`:
+For Intel VAAPI or Intel Quick Sync on Linux, add device access to `docker-compose.yml`:
 
 ```yaml
 services:
@@ -37,7 +37,21 @@ services:
       - /dev/dri:/dev/dri
 ```
 
+The Docker image includes the Intel iHD VAAPI/media runtime, `vainfo`, the VA-API DRM libraries, and the oneVPL/QSV runtime libraries needed by Intel hardware profiles. Raptor Lake and newer Intel iGPUs should use `LIBVA_DRIVER_NAME=iHD`, which is the image default. If you are using a non-Intel VAAPI device, override or unset that environment variable in Compose for the appropriate driver.
+
 Media Atlas checks for `/dev/dri/renderD128` before running VAAPI or Quick Sync jobs. If the device is not present inside the container, the item fails preflight instead of starting a doomed encode.
+
+Useful Intel VAAPI checks after starting the container:
+
+```bash
+docker exec -it media-atlas ls -l /usr/lib/x86_64-linux-gnu/dri/*iHD*
+docker exec -it media-atlas vainfo --display drm --device /dev/dri/renderD128
+docker exec -it media-atlas ffmpeg -hide_banner \
+  -vaapi_device /dev/dri/renderD128 \
+  -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 \
+  -vf "format=nv12,hwupload" \
+  -c:v hevc_vaapi -qp 24 -y /tmp/vaapi-test.mp4
+```
 
 For NVIDIA NVENC, install the NVIDIA Container Toolkit on the host and add:
 
@@ -46,6 +60,8 @@ services:
   media-atlas:
     gpus: all
 ```
+
+NVENC does not use `/dev/dri` or the Intel iHD driver; it requires NVIDIA host drivers plus NVIDIA Container Toolkit runtime support.
 
 ## CPU And Encoder Checks
 

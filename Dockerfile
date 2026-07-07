@@ -33,11 +33,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES=1073741824 \
     MEDIA_ATLAS_AUTH_MODE=disabled \
     MEDIA_ATLAS_LOG_RETENTION_DAYS=30 \
-    MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS=0
+    MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS=0 \
+    LIBVA_DRIVER_NAME=iHD
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt-get update; \
+    packages="ffmpeg intel-media-va-driver libva-drm2 libva2 libvpl2 vainfo"; \
+    if apt-cache show libmfx1 >/dev/null 2>&1; then \
+        packages="$packages libmfx1"; \
+    fi; \
+    apt-get install -y --no-install-recommends $packages; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
 

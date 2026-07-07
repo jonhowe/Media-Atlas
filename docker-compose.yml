@@ -44,7 +44,8 @@ services:
       # Optional writable staging/output mount if you want staged transcodes
       # outside the project directory. Leave unset to use ./transcode-staging.
       # - ${MEDIA_ATLAS_TRANSCODE_OUTPUT_ROOT}:/app/transcode-staging
-    # Optional VAAPI / Intel Quick Sync access on Linux hosts.
+    # Optional Intel VAAPI / Quick Sync access on Linux hosts.
+    # The image defaults LIBVA_DRIVER_NAME=iHD for Intel iGPUs.
     # devices:
     #   - /dev/dri:/dev/dri
     # Optional NVIDIA NVENC support requires the NVIDIA Container Toolkit.
