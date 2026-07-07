@@ -216,6 +216,7 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 | `MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS` | Probe timeout | `.env` | Per-file `ffprobe` timeout during scans. Minimum enforced value is `5`. Default: `60`. |
 | `MEDIA_ATLAS_HOST` | Backend bind host | `docker-compose.yml` environment | Backend bind address. Docker should use `0.0.0.0` so port publishing works. Local development should usually use `127.0.0.1`. |
 | `MEDIA_ATLAS_IMAGE` | Container image tag | `.env` | Compose-only variable used by `docker-compose.yml` to choose the GHCR image. Use `latest` for convenience or a pinned release tag for production rollback safety. |
+| `LIBVA_DRIVER_NAME` | VAAPI driver name | Docker image default or `.env` override | VAAPI driver selected by libva. The Docker image defaults to `iHD` for Intel iGPUs, including Raptor Lake and newer. Override or unset it only for non-Intel VAAPI hardware. |
 | `MEDIA_ATLAS_LOG_RETENTION_DAYS` | Log retention days | `.env` | Number of days to keep old app/transcode log files when retention cleanup runs. Set `0` to disable log deletion. Default: `30`. |
 | `MEDIA_ATLAS_LOGS_DIR` | Logs directory | `docker-compose.yml` environment | Directory for app and transcode logs. Docker default: `/app/logs`, normally bind-mounted to `./logs`. |
 | `MEDIA_ATLAS_MARK_MISSING_FILES` | Mark missing files | `.env` | If `true`, rescans mark previously seen files as missing when the root is available but the file is gone. Unavailable roots are skipped so whole libraries are not marked missing accidentally. |

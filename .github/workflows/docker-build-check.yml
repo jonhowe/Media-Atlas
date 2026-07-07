@@ -52,7 +52,7 @@ jobs:
       - name: Smoke test image internals
         run: |
           docker run --rm media-atlas:ci-test \
-            bash -c "which ffmpeg && which ffprobe && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
+            bash -c "which ffmpeg && which ffprobe && which vainfo && test -f /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so && test \"\$LIBVA_DRIVER_NAME\" = iHD && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
 
       - name: Smoke test HTTP health endpoint
         run: |

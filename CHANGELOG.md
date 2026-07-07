@@ -7,6 +7,7 @@ This changelog summarizes the commits currently on `main`. New user-facing chang
 - Added transcode run cleanup for published items, including staged-output deletion, backup deletion, per-item cleanup status, and archive-on-success behavior.
 - Added transcode run archive/unarchive controls and hid archived runs by default.
 - Added transcode savings tracking with before/after file sizes, cumulative runtime, run/item counts, and total space saved.
+- Added Intel iHD VAAPI runtime packages, `vainfo`, hardware-transcode verification docs, and image smoke checks for Linux Intel VAAPI / Quick Sync hosts.
 - Replaced the light/dark text toggle with icon-only sun/moon controls.
 
 ## Main Branch History
