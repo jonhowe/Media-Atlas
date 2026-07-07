@@ -10,9 +10,9 @@ Media Atlas generates only app-defined `ffmpeg` commands. Users can choose from 
 | HEVC Archive Balanced | `libx265 -crf 20 -preset medium` | Slow | Maximum compression and quality. |
 | HEVC Archive Fast | `libx265 -crf 21 -preset fast` | Medium | Recommended default for most archival conversions. |
 | HEVC Archive Faster | `libx265 -crf 22 -preset faster` | Fast | Bulk conversions where larger outputs are acceptable. |
-| HEVC Quick Sync | `hevc_qsv -global_quality 24` | Very fast | Intel iGPU/Quick Sync hosts. |
+| HEVC Quick Sync | `hevc_qsv -global_quality 24` | Very fast | Intel iGPU hosts when FFmpeg QSV runtime support is working. |
 | HEVC NVENC | `hevc_nvenc -cq 24 -preset p5` | Very fast | NVIDIA GPU hosts. |
-| HEVC VAAPI | `hevc_vaapi -qp 24` | Very fast | Linux VAAPI hosts, usually Intel or AMD. |
+| HEVC VAAPI | `hevc_vaapi -qp 24` | Very fast | Recommended Intel Linux hardware profile when `/dev/dri` and the iHD driver are available. |
 | H.264 Compatibility | `libx264 -crf 20 -preset slow` | Medium | MP4 compatibility outputs. |
 | Manual Review Only | none | n/a | Track complex files that should not produce a runnable command. |
 
@@ -40,6 +40,8 @@ services:
 The Docker image includes the Intel iHD VAAPI/media runtime, `vainfo`, the VA-API DRM libraries, and the oneVPL/QSV runtime libraries needed by Intel hardware profiles. Raptor Lake and newer Intel iGPUs should use `LIBVA_DRIVER_NAME=iHD`, which is the image default. If you are using a non-Intel VAAPI device, override or unset that environment variable in Compose for the appropriate driver.
 
 Media Atlas checks for `/dev/dri/renderD128` before running VAAPI or Quick Sync jobs. If the device is not present inside the container, the item fails preflight instead of starting a doomed encode.
+
+On Intel Linux hosts, prefer the `HEVC VAAPI` profile first when `/dev/dri` is mounted and `iHD_drv_video.so` is present in the container. `HEVC Quick Sync` / `hevc_qsv` can still fail depending on the FFmpeg build and QSV runtime dispatch support, even when VAAPI and `vainfo` work correctly on the same host.
 
 Useful Intel VAAPI checks after starting the container:
 
