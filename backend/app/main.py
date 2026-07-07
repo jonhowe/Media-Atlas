@@ -99,6 +99,11 @@ class PublishRunItemRequest(BaseModel):
     confirmation_text: str = Field(min_length=1)
 
 
+class CleanupRunRequest(BaseModel):
+    confirmation_text: str = Field(min_length=1)
+    archive_run: bool = True
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -808,8 +813,21 @@ async def create_transcode_run(payload: RunCreate) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-runs")
-async def list_transcode_runs(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
-    return db.query_all("SELECT * FROM transcode_runs ORDER BY id DESC LIMIT ?", (limit,))
+async def list_transcode_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    include_archived: bool = False,
+) -> list[dict[str, Any]]:
+    archive_filter = "" if include_archived else "WHERE archived_at IS NULL"
+    return db.query_all(
+        f"""
+        SELECT *
+        FROM transcode_runs
+        {archive_filter}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
 
 
 @app.get("/api/transcode-runs/{run_id}")
@@ -831,6 +849,42 @@ async def cancel_transcode_run(run_id: int) -> dict[str, Any]:
 async def retry_transcode_run(run_id: int) -> dict[str, Any]:
     await transcode_manager.retry_run(run_id)
     return await read_transcode_run(run_id)
+
+
+@app.post("/api/transcode-runs/{run_id}/archive")
+async def archive_transcode_run(run_id: int) -> dict[str, Any]:
+    run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
+    if not run:
+        raise HTTPException(status_code=404, detail="Transcode run not found.")
+    if run["status"] in {"queued", "running"}:
+        raise HTTPException(status_code=400, detail="Active transcode runs cannot be archived.")
+    db.execute(
+        "UPDATE transcode_runs SET archived_at = COALESCE(archived_at, ?) WHERE id = ?",
+        (db.utc_now(), run_id),
+    )
+    return await read_transcode_run(run_id)
+
+
+@app.post("/api/transcode-runs/{run_id}/unarchive")
+async def unarchive_transcode_run(run_id: int) -> dict[str, Any]:
+    run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
+    if not run:
+        raise HTTPException(status_code=404, detail="Transcode run not found.")
+    db.execute("UPDATE transcode_runs SET archived_at = NULL WHERE id = ?", (run_id,))
+    return await read_transcode_run(run_id)
+
+
+@app.post("/api/transcode-runs/{run_id}/cleanup")
+async def cleanup_transcode_run(run_id: int, payload: CleanupRunRequest) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(
+            transcode_manager.cleanup_run_artifacts,
+            run_id,
+            payload.confirmation_text,
+            payload.archive_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/transcode-runs/{run_id}/events")

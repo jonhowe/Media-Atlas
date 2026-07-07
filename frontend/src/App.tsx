@@ -59,6 +59,23 @@ function getInitialTheme(): Theme {
   }
 }
 
+function SunIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [toast, setToast] = useState<string>("");
@@ -163,10 +180,12 @@ export default function App() {
             <button
               className="themeToggle"
               type="button"
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               aria-pressed={theme === "dark"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               onClick={toggleTheme}
             >
-              {theme === "dark" ? "Light mode" : "Dark mode"}
+              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
             </button>
             {auth.mode !== "disabled" && <button onClick={logout}>Log out</button>}
           </div>
@@ -1121,17 +1140,26 @@ function isPublishingItem(item: TranscodeRunItem) {
   return item.publish_status === "queued" || item.publish_status === "running";
 }
 
+function canCleanupRun(run: TranscodeRun) {
+  return Boolean(run.items?.some((item) => item.published_at && item.cleanup_status !== "cleaned"));
+}
+
+function canArchiveRun(run: TranscodeRun) {
+  return !["queued", "running"].includes(run.status);
+}
+
 function Runs({ onToast }: { onToast: (message: string) => void }) {
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selected, setSelected] = useState<TranscodeRun | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [log, setLog] = useState("");
 
   useEffect(() => {
     refreshRuns();
     const timer = window.setInterval(refreshRuns, 2000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1141,7 +1169,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
   }, [selectedId]);
 
   async function refreshRuns() {
-    setRuns(await api<TranscodeRun[]>("/api/transcode-runs"));
+    setRuns(await api<TranscodeRun[]>(`/api/transcode-runs?limit=50${showArchived ? "&include_archived=true" : ""}`));
   }
 
   async function refreshRun(id: number) {
@@ -1158,8 +1186,48 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
     onToast("Retry queued.");
   }
 
+  async function archiveRun(id: number) {
+    await api(`/api/transcode-runs/${id}/archive`, { method: "POST", body: "{}" });
+    onToast("Transcode run archived.");
+    await refreshRuns();
+    if (selectedId === id) await refreshRun(id);
+  }
+
+  async function unarchiveRun(id: number) {
+    await api(`/api/transcode-runs/${id}/unarchive`, { method: "POST", body: "{}" });
+    onToast("Transcode run restored.");
+    await refreshRuns();
+    if (selectedId === id) await refreshRun(id);
+  }
+
   async function showLog(runId: number, itemId: number) {
     setLog(await apiText(`/api/transcode-runs/${runId}/items/${itemId}/log`));
+  }
+
+  async function cleanupRun(run: TranscodeRun) {
+    const firstConfirmed = window.confirm(
+      `Clean up staged outputs and backup files for published items in run #${run.id}?\n\nThis deletes staged transcode outputs and original-file backups for published items, then archives the run. Only do this after you have validated the published media.`
+    );
+    if (!firstConfirmed) return;
+    const phrase = window.prompt(
+      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete eligible staged outputs and backups for run #${run.id}.`
+    );
+    if (phrase !== "DELETE ARTIFACTS") {
+      onToast("Cleanup canceled.");
+      return;
+    }
+    try {
+      const updated = await api<TranscodeRun>(`/api/transcode-runs/${run.id}/cleanup`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: phrase, archive_run: true })
+      });
+      setSelected(updated);
+      await refreshRuns();
+      onToast("Cleanup completed and run archived.");
+    } catch (error) {
+      onToast(String(error));
+      await refreshRun(run.id);
+    }
   }
 
   async function publishItem(runId: number, item: TranscodeRunItem) {
@@ -1195,6 +1263,17 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
   return (
     <section className="stack">
       <Panel title="Runs">
+        <div className="panelIntro">
+          <p className="muted">Archived runs are hidden by default.</p>
+          <label className="inlineCheck">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(event) => setShowArchived(event.target.checked)}
+            />
+            Show archived
+          </label>
+        </div>
         <table>
           <thead>
             <tr>
@@ -1214,6 +1293,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                 <td>
                   <strong>{run.name}</strong>
                   <div className="muted">Created {formatDateTime(run.created_at)}</div>
+                  {run.archived_at && <div className="muted">Archived {formatDateTime(run.archived_at)}</div>}
                 </td>
                 <td><StatusBadge status={run.status} /></td>
                 <td>{formatDateTime(run.started_at)}</td>
@@ -1241,6 +1321,11 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                   <button onClick={() => setSelectedId(run.id)}>Open</button>
                   {["queued", "running"].includes(run.status) && <button onClick={() => cancel(run.id)}>Cancel</button>}
                   {["failed", "canceled", "interrupted"].includes(run.status) && <button onClick={() => retry(run.id)}>Retry</button>}
+                  {canArchiveRun(run) && (run.archived_at ? (
+                    <button onClick={() => unarchiveRun(run.id)}>Unarchive</button>
+                  ) : (
+                    <button onClick={() => archiveRun(run.id)}>Archive</button>
+                  ))}
                 </td>
               </tr>
             ))}
@@ -1249,12 +1334,23 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
       </Panel>
       {selected && (
         <Panel title={`Run ${selected.id}: ${selected.name}`}>
-          <p>{selected.message}</p>
+          <div className="panelIntro">
+            <p>{selected.message}</p>
+            <div className="rowActions">
+              {canCleanupRun(selected) && <button className="danger" onClick={() => cleanupRun(selected)}>Clean up &amp; archive</button>}
+              {canArchiveRun(selected) && (selected.archived_at ? (
+                <button onClick={() => unarchiveRun(selected.id)}>Unarchive</button>
+              ) : (
+                <button onClick={() => archiveRun(selected.id)}>Archive</button>
+              ))}
+            </div>
+          </div>
           <div className="metrics compact">
             <Metric label="Created" value={formatDateTime(selected.created_at)} />
             <Metric label="Started" value={formatDateTime(selected.started_at)} />
             <Metric label="Stopped" value={formatStopDateTime(selected.finished_at, selected.status)} />
             <Metric label="Duration" value={formatRunDuration(selected)} />
+            <Metric label="Archived" value={formatNullableDateTime(selected.archived_at)} />
           </div>
           <table>
             <thead>
@@ -1323,6 +1419,15 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                           </div>
                           {item.published_at && <span className="muted">Published {formatDateTime(item.published_at)}</span>}
                           {item.published_backup_path && <span className="muted">Backup {item.published_backup_path}</span>}
+                          {item.cleanup_status && (
+                            <div className="scanTiming">
+                              <span>Cleanup <StatusBadge status={item.cleanup_status} /></span>
+                              {item.cleanup_message && <span>{item.cleanup_message}</span>}
+                              {item.cleanup_finished_at && <span>Cleaned {formatDateTime(item.cleanup_finished_at)}</span>}
+                              {item.staged_deleted_at && <span>Staged deleted {formatDateTime(item.staged_deleted_at)}</span>}
+                              {item.backup_deleted_at && <span>Backup deleted {formatDateTime(item.backup_deleted_at)}</span>}
+                            </div>
+                          )}
                         </>
                       ) : (
                         <span className="muted">Not published</span>
@@ -1861,7 +1966,7 @@ function Badge({ tone = "muted", children }: { tone?: string; children: ReactNod
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const tone = ["succeeded", "verified", "ok", "published"].includes(status)
+  const tone = ["succeeded", "verified", "ok", "published", "cleaned"].includes(status)
     ? "good"
     : ["failed", "error", "verification_failed"].includes(status)
       ? "bad"
@@ -1969,6 +2074,10 @@ function formatDateTime(value?: string | null) {
     hour: "numeric",
     minute: "2-digit"
   });
+}
+
+function formatNullableDateTime(value?: string | null) {
+  return value ? formatDateTime(value) : "Not archived";
 }
 
 function formatStopDateTime(value?: string | null, status?: string) {

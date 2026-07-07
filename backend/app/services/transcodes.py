@@ -118,6 +118,129 @@ class TranscodeManager:
             if item and item["run_id"] == run_id:
                 self._process.terminate()
 
+    def cleanup_run_artifacts(
+        self,
+        run_id: int,
+        confirmation_text: str,
+        archive_run: bool = True,
+    ) -> dict[str, Any]:
+        if confirmation_text != "DELETE ARTIFACTS":
+            raise ValueError("Cleanup requires the confirmation text DELETE ARTIFACTS.")
+        run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
+        if not run:
+            raise ValueError("Transcode run not found.")
+        if run["status"] in {"queued", "running"}:
+            raise ValueError("Active transcode runs cannot be cleaned up.")
+
+        items = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
+        published_items = [item for item in items if item.get("published_at")]
+        if not published_items:
+            raise ValueError("No published transcode items are available for cleanup.")
+
+        summary: dict[str, Any] = {
+            "items_seen": len(published_items),
+            "items_cleaned": 0,
+            "items_skipped": 0,
+            "errors": [],
+            "staged_deleted": 0,
+            "backups_deleted": 0,
+            "run_archived": False,
+        }
+
+        for item in published_items:
+            if item.get("cleanup_status") == "cleaned":
+                summary["items_skipped"] += 1
+                continue
+            item_id = item["id"]
+            started_at = db.utc_now()
+            db.execute(
+                """
+                UPDATE transcode_run_items
+                SET cleanup_status = 'running',
+                    cleanup_message = 'Cleaning up staged and backup artifacts.',
+                    cleanup_started_at = COALESCE(cleanup_started_at, ?),
+                    cleanup_finished_at = NULL
+                WHERE id = ?
+                """,
+                (started_at, item_id),
+            )
+            messages: list[str] = []
+            errors: list[str] = []
+            staged_deleted_at = None
+            backup_deleted_at = None
+
+            try:
+                deleted, message = _delete_artifact(Path(item["target_path"]), CONFIG.transcoder.staging_dir)
+                messages.append(f"Staged output: {message}")
+                if deleted:
+                    summary["staged_deleted"] += 1
+                    staged_deleted_at = db.utc_now()
+            except ValueError as exc:
+                errors.append(str(exc))
+
+            backup_path = item.get("published_backup_path")
+            if backup_path:
+                try:
+                    deleted, message = _delete_artifact(Path(backup_path), CONFIG.transcoder.backup_dir)
+                    messages.append(f"Backup: {message}")
+                    if deleted:
+                        summary["backups_deleted"] += 1
+                        backup_deleted_at = db.utc_now()
+                except ValueError as exc:
+                    errors.append(str(exc))
+            else:
+                messages.append("Backup: no backup path was recorded.")
+
+            finished_at = db.utc_now()
+            if errors:
+                message = "; ".join(errors + messages)
+                summary["errors"].append({"item_id": item_id, "message": message})
+                db.execute(
+                    """
+                    UPDATE transcode_run_items
+                    SET cleanup_status = 'failed',
+                        cleanup_message = ?,
+                        cleanup_finished_at = ?,
+                        staged_deleted_at = COALESCE(staged_deleted_at, ?),
+                        backup_deleted_at = COALESCE(backup_deleted_at, ?)
+                    WHERE id = ?
+                    """,
+                    (message, finished_at, staged_deleted_at, backup_deleted_at, item_id),
+                )
+                continue
+
+            summary["items_cleaned"] += 1
+            db.execute(
+                """
+                UPDATE transcode_run_items
+                SET cleanup_status = 'cleaned',
+                    cleanup_message = ?,
+                    cleanup_finished_at = ?,
+                    staged_deleted_at = COALESCE(staged_deleted_at, ?),
+                    backup_deleted_at = COALESCE(backup_deleted_at, ?)
+                WHERE id = ?
+                """,
+                ("; ".join(messages), finished_at, staged_deleted_at, backup_deleted_at, item_id),
+            )
+
+        if archive_run and not summary["errors"]:
+            archived_at = db.utc_now()
+            db.execute(
+                """
+                UPDATE transcode_runs
+                SET archived_at = COALESCE(archived_at, ?),
+                    message = ?
+                WHERE id = ?
+                """,
+                (archived_at, "Cleanup completed and run archived.", run_id),
+            )
+            summary["run_archived"] = True
+
+        updated = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,)) or run
+        updated["items"] = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
+        updated["cleanup_summary"] = summary
+        return updated
+
     async def retry_run(self, run_id: int) -> dict[str, Any]:
         now = db.utc_now()
         retryable_items = db.query_all(
@@ -770,6 +893,29 @@ def _move_file(
         except OSError:
             target.unlink(missing_ok=True)
             raise
+
+
+def _delete_artifact(path: Path, root: Path) -> tuple[bool, str]:
+    if not _is_within(path, root):
+        raise ValueError(f"Refusing to delete artifact outside {root}: {path}")
+    if not path.exists():
+        return False, "already absent."
+    if not path.is_file():
+        raise ValueError(f"Refusing to delete non-file artifact: {path}")
+    path.unlink()
+    _prune_empty_parents(path.parent, root)
+    return True, "deleted."
+
+
+def _prune_empty_parents(path: Path, root: Path) -> None:
+    root = root.expanduser().resolve()
+    current = path.expanduser().resolve()
+    while current != root:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def build_command(profile: dict[str, Any], source_path: str, target_path: str) -> list[str] | None:

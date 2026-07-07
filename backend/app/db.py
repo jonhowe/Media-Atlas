@@ -651,6 +651,19 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE transcode_run_items ADD COLUMN publish_bytes_total INTEGER NOT NULL DEFAULT 0;
         """,
     ),
+    (
+        "0005_transcode_run_cleanup_archive",
+        """
+        ALTER TABLE transcode_runs ADD COLUMN archived_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_transcode_runs_archived ON transcode_runs(archived_at);
+        ALTER TABLE transcode_run_items ADD COLUMN cleanup_status TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN cleanup_message TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN cleanup_started_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN cleanup_finished_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN staged_deleted_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN backup_deleted_at TEXT;
+        """,
+    ),
 ]
 
 
