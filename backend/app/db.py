@@ -664,6 +664,20 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE transcode_run_items ADD COLUMN backup_deleted_at TEXT;
         """,
     ),
+    (
+        "0006_transcode_savings",
+        """
+        ALTER TABLE transcode_run_items ADD COLUMN source_size_bytes INTEGER;
+        ALTER TABLE transcode_run_items ADD COLUMN output_size_bytes INTEGER;
+        UPDATE transcode_run_items
+        SET source_size_bytes = (
+            SELECT files.size_bytes
+            FROM files
+            WHERE files.id = transcode_run_items.file_id
+        )
+        WHERE source_size_bytes IS NULL;
+        """,
+    ),
 ]
 
 

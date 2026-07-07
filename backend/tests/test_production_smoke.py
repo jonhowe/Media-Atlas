@@ -27,7 +27,7 @@ class ProductionSmokeTest(unittest.TestCase):
             from app import db
             from app.config import CONFIG
             from app.main import app, transcode_manager
-            from app.services.transcodes import build_command
+            from app.services.transcodes import build_command, transcode_savings_stats
 
             db.init_db()
             self.assertTrue(db.migration_status()["ok"])
@@ -36,6 +36,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0003_publish_transcode_items", db.migration_status()["applied"])
             self.assertIn("0004_publish_progress", db.migration_status()["applied"])
             self.assertIn("0005_transcode_run_cleanup_archive", db.migration_status()["applied"])
+            self.assertIn("0006_transcode_savings", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
@@ -125,6 +126,8 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertEqual(published["publish_status"], "published")
             self.assertEqual(published["publish_step"], "completed")
             self.assertEqual(published["publish_progress_percent"], 100)
+            self.assertEqual(published["source_size_bytes"], len(b"original media bytes"))
+            self.assertEqual(published["output_size_bytes"], len(b"transcoded media bytes"))
             self.assertEqual(
                 published["publish_bytes_total"],
                 len(b"original media bytes") + len(b"transcoded media bytes"),
@@ -139,6 +142,15 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertEqual(cleaned_item["cleanup_status"], "cleaned")
             self.assertTrue(cleaned_item["staged_deleted_at"])
             self.assertTrue(cleaned_item["backup_deleted_at"])
+            savings = transcode_savings_stats()
+            self.assertEqual(savings["runs_started"], 0)
+            self.assertEqual(savings["items_succeeded"], 1)
+            self.assertEqual(savings["total_source_size_bytes"], len(b"original media bytes"))
+            self.assertEqual(savings["total_output_size_bytes"], len(b"transcoded media bytes"))
+            self.assertEqual(
+                savings["total_space_saved_bytes"],
+                len(b"original media bytes") - len(b"transcoded media bytes"),
+            )
 
             with TestClient(app) as client:
                 live = client.get("/api/health/live")
@@ -148,6 +160,10 @@ class ProductionSmokeTest(unittest.TestCase):
                 auth = client.get("/api/auth/me")
                 self.assertEqual(auth.status_code, 200)
                 self.assertTrue(auth.json()["authenticated"])
+
+                stats = client.get("/api/transcode-runs/stats")
+                self.assertEqual(stats.status_code, 200)
+                self.assertEqual(stats.json()["items_with_size_comparison"], 1)
 
 
 if __name__ == "__main__":

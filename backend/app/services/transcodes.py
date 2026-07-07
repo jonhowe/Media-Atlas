@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,6 +14,70 @@ from ..config import CONFIG
 from .ffprobe import ProbeError, probe_file
 from .paths import safe_shell_join
 from .recommendations import transcode_warnings
+
+
+def transcode_savings_stats() -> dict[str, Any]:
+    runs = db.query_all("SELECT * FROM transcode_runs")
+    items = db.query_all(
+        """
+        SELECT tri.*, f.size_bytes AS file_size_bytes
+        FROM transcode_run_items tri
+        LEFT JOIN files f ON f.id = tri.file_id
+        """
+    )
+    total_source_size = 0
+    total_output_size = 0
+    measured_items = 0
+    item_runtime_seconds = 0.0
+    now = db.utc_now()
+
+    for item in items:
+        runtime_end = item.get("finished_at") or (now if item.get("status") == "running" else None)
+        item_runtime_seconds += _duration_seconds(item.get("started_at"), runtime_end)
+        if item.get("status") != "succeeded":
+            continue
+        source_size = item.get("source_size_bytes")
+        if source_size is None:
+            source_size = item.get("file_size_bytes")
+        output_size = item.get("output_size_bytes")
+        if output_size is None:
+            target = Path(item["target_path"])
+            if _is_within(target, CONFIG.transcoder.staging_dir) and target.exists() and target.is_file():
+                output_size = target.stat().st_size
+        if source_size is None or output_size is None:
+            continue
+        measured_items += 1
+        total_source_size += int(source_size)
+        total_output_size += int(output_size)
+
+    saved = total_source_size - total_output_size
+    return {
+        "runs_total": len(runs),
+        "runs_started": sum(1 for run in runs if run.get("started_at")),
+        "runs_succeeded": sum(1 for run in runs if run.get("status") == "succeeded"),
+        "runs_archived": sum(1 for run in runs if run.get("archived_at")),
+        "items_total": len(items),
+        "items_succeeded": sum(1 for item in items if item.get("status") == "succeeded"),
+        "items_published": sum(1 for item in items if item.get("published_at")),
+        "items_cleaned": sum(1 for item in items if item.get("cleanup_status") == "cleaned"),
+        "items_with_size_comparison": measured_items,
+        "total_runtime_seconds": round(item_runtime_seconds, 2),
+        "total_source_size_bytes": total_source_size,
+        "total_output_size_bytes": total_output_size,
+        "total_space_saved_bytes": saved,
+        "savings_percent": round((saved / total_source_size) * 100, 2) if total_source_size else 0,
+    }
+
+
+def _duration_seconds(start: str | None, end: str | None) -> float:
+    if not start or not end:
+        return 0.0
+    try:
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+    except ValueError:
+        return 0.0
+    return max(0.0, (end_dt - start_dt).total_seconds())
 
 
 class TranscodeManager:
@@ -65,6 +130,17 @@ class TranscodeManager:
         runnable = [item for item in items if item.get("command_json")]
         if not runnable:
             raise ValueError("Plan has no runnable items.")
+        file_sizes = {
+            row["id"]: row["size_bytes"]
+            for row in db.query_all(
+                f"""
+                SELECT id, size_bytes
+                FROM files
+                WHERE id IN ({",".join("?" for _ in runnable)})
+                """,
+                tuple(item["file_id"] for item in runnable),
+            )
+        }
         now = db.utc_now()
         run_id = db.execute(
             """
@@ -88,6 +164,7 @@ class TranscodeManager:
                     item["command_json"],
                     item["command_display"],
                     item["warnings_json"],
+                    file_sizes.get(item["file_id"]),
                     now,
                 )
             )
@@ -95,9 +172,9 @@ class TranscodeManager:
             """
             INSERT INTO transcode_run_items (
                 run_id, plan_item_id, file_id, status, source_path, target_path,
-                command_json, command_display, warnings_json, created_at
+                command_json, command_display, warnings_json, source_size_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -263,6 +340,7 @@ class TranscodeManager:
                 exit_code = NULL,
                 verification_status = NULL,
                 verification_message = NULL,
+                output_size_bytes = NULL,
                 started_at = NULL,
                 finished_at = NULL
             WHERE run_id = ? AND status IN ('failed', 'interrupted', 'verification_failed', 'canceled')
@@ -448,6 +526,8 @@ class TranscodeManager:
                 publish_progress_percent = 100,
                 publish_bytes_done = ?,
                 publish_bytes_total = ?,
+                source_size_bytes = COALESCE(source_size_bytes, ?),
+                output_size_bytes = COALESCE(output_size_bytes, ?),
                 published_backup_path = ?
             WHERE id = ?
             """,
@@ -457,6 +537,8 @@ class TranscodeManager:
                 finished_at,
                 total_bytes,
                 total_bytes,
+                source_size,
+                target_size,
                 str(backup_path),
                 item_id,
             ),
@@ -736,6 +818,17 @@ class TranscodeManager:
         verification_status: str,
         verification_message: str,
     ) -> None:
+        item = db.query_one("SELECT target_path, source_path, source_size_bytes FROM transcode_run_items WHERE id = ?", (item_id,))
+        source_size = item.get("source_size_bytes") if item else None
+        if item and source_size is None:
+            source = Path(item["source_path"])
+            if source.exists() and source.is_file():
+                source_size = source.stat().st_size
+        output_size = None
+        if item and status == "succeeded":
+            target = Path(item["target_path"])
+            if target.exists() and target.is_file():
+                output_size = target.stat().st_size
         db.execute(
             """
             UPDATE transcode_run_items
@@ -744,10 +837,22 @@ class TranscodeManager:
                 exit_code = ?,
                 verification_status = ?,
                 verification_message = ?,
+                source_size_bytes = COALESCE(source_size_bytes, ?),
+                output_size_bytes = COALESCE(?, output_size_bytes),
                 finished_at = ?
             WHERE id = ?
             """,
-            (status, status, exit_code, verification_status, verification_message, db.utc_now(), item_id),
+            (
+                status,
+                status,
+                exit_code,
+                verification_status,
+                verification_message,
+                source_size,
+                output_size,
+                db.utc_now(),
+                item_id,
+            ),
         )
 
     def _refresh_run_status(self, run_id: int) -> None:

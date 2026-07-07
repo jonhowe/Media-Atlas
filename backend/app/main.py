@@ -46,7 +46,7 @@ from .services.plex import (
 )
 from .services.retention import apply_retention
 from .services.scanner import ScanManager
-from .services.transcodes import TranscodeManager, create_plan, get_plan
+from .services.transcodes import TranscodeManager, create_plan, get_plan, transcode_savings_stats
 
 configure_logging()
 logger = logging.getLogger("media_atlas.requests")
@@ -828,6 +828,11 @@ async def list_transcode_runs(
         """,
         (limit,),
     )
+
+
+@app.get("/api/transcode-runs/stats")
+async def transcode_run_stats() -> dict[str, Any]:
+    return transcode_savings_stats()
 
 
 @app.get("/api/transcode-runs/{run_id}")

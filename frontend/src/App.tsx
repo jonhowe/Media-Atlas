@@ -17,7 +17,8 @@ import type {
   TranscodePlanItem,
   TranscodeProfile,
   TranscodeRun,
-  TranscodeRunItem
+  TranscodeRunItem,
+  TranscodeSavingsStats
 } from "./types";
 
 type Page =
@@ -400,6 +401,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [scans, setScans] = useState<ScanJob[]>([]);
+  const [savings, setSavings] = useState<TranscodeSavingsStats | null>(null);
 
   useEffect(() => {
     refresh();
@@ -409,16 +411,18 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
 
   async function refresh() {
     try {
-      const [nextHealth, nextSummary, nextRuns, nextScans] = await Promise.all([
+      const [nextHealth, nextSummary, nextRuns, nextScans, nextSavings] = await Promise.all([
         api<Health>("/api/health"),
         api<Summary>("/api/reports/summary"),
         api<TranscodeRun[]>("/api/transcode-runs?limit=5"),
-        api<ScanJob[]>("/api/scans?limit=5")
+        api<ScanJob[]>("/api/scans?limit=5"),
+        api<TranscodeSavingsStats>("/api/transcode-runs/stats")
       ]);
       setHealth(nextHealth);
       setSummary(nextSummary);
       setRuns(nextRuns);
       setScans(nextScans);
+      setSavings(nextSavings);
     } catch (error) {
       onToast(String(error));
     }
@@ -445,6 +449,9 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
         </Panel>
         <Panel title="Plex Enrichment">
           <PlexStatusPanel status={summary?.plex} />
+        </Panel>
+        <Panel title="Transcode Savings">
+          <TranscodeSavingsPanel stats={savings} />
         </Panel>
         <Panel title="Recent Transcode Runs">
           <CompactList rows={runs} primary="name" secondary="status" />
@@ -1148,12 +1155,33 @@ function canArchiveRun(run: TranscodeRun) {
   return !["queued", "running"].includes(run.status);
 }
 
+function summarizeRunSavings(run: TranscodeRun) {
+  let sourceSize = 0;
+  let outputSize = 0;
+  let measuredItems = 0;
+  for (const item of run.items || []) {
+    if (item.status !== "succeeded" || item.source_size_bytes == null || item.output_size_bytes == null) {
+      continue;
+    }
+    sourceSize += item.source_size_bytes;
+    outputSize += item.output_size_bytes;
+    measuredItems += 1;
+  }
+  return {
+    sourceSize,
+    outputSize,
+    measuredItems,
+    saved: sourceSize - outputSize
+  };
+}
+
 function Runs({ onToast }: { onToast: (message: string) => void }) {
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selected, setSelected] = useState<TranscodeRun | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [log, setLog] = useState("");
+  const [stats, setStats] = useState<TranscodeSavingsStats | null>(null);
 
   useEffect(() => {
     refreshRuns();
@@ -1169,7 +1197,12 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
   }, [selectedId]);
 
   async function refreshRuns() {
-    setRuns(await api<TranscodeRun[]>(`/api/transcode-runs?limit=50${showArchived ? "&include_archived=true" : ""}`));
+    const [nextRuns, nextStats] = await Promise.all([
+      api<TranscodeRun[]>(`/api/transcode-runs?limit=50${showArchived ? "&include_archived=true" : ""}`),
+      api<TranscodeSavingsStats>("/api/transcode-runs/stats")
+    ]);
+    setRuns(nextRuns);
+    setStats(nextStats);
   }
 
   async function refreshRun(id: number) {
@@ -1253,6 +1286,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
         })
       });
       await refreshRun(runId);
+      await refreshRuns();
       onToast("Published staged output. Original file was backed up.");
     } catch (error) {
       onToast(String(error));
@@ -1260,8 +1294,13 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
     }
   }
 
+  const selectedSavings = selected ? summarizeRunSavings(selected) : null;
+
   return (
     <section className="stack">
+      <Panel title="Transcode Savings">
+        <TranscodeSavingsPanel stats={stats} />
+      </Panel>
       <Panel title="Runs">
         <div className="panelIntro">
           <p className="muted">Archived runs are hidden by default.</p>
@@ -1351,6 +1390,10 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
             <Metric label="Stopped" value={formatStopDateTime(selected.finished_at, selected.status)} />
             <Metric label="Duration" value={formatRunDuration(selected)} />
             <Metric label="Archived" value={formatNullableDateTime(selected.archived_at)} />
+            <Metric label="Before" value={formatBytes(selectedSavings?.sourceSize || 0)} />
+            <Metric label="After" value={formatBytes(selectedSavings?.outputSize || 0)} />
+            <Metric label="Saved" value={formatSignedBytes(selectedSavings?.saved || 0)} />
+            <Metric label="Measured Items" value={`${selectedSavings?.measuredItems || 0}`} />
           </div>
           <table>
             <thead>
@@ -1392,6 +1435,13 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                     <span>{item.target_path}</span>
                     <strong>Original</strong>
                     <span>{item.source_path}</span>
+                    <div className="scanTiming">
+                      {item.source_size_bytes != null && <span>Before {formatBytes(item.source_size_bytes)}</span>}
+                      {item.output_size_bytes != null && <span>After {formatBytes(item.output_size_bytes)}</span>}
+                      {item.source_size_bytes != null && item.output_size_bytes != null && (
+                        <span>Saved {formatSignedBytes(item.source_size_bytes - item.output_size_bytes)}</span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <div className="statusGrid">
@@ -1939,6 +1989,32 @@ function PlexStatusPanel({ status }: { status?: PlexStatus }) {
   );
 }
 
+function TranscodeSavingsPanel({ stats }: { stats: TranscodeSavingsStats | null }) {
+  if (!stats) {
+    return <p className="muted">Transcode savings unavailable.</p>;
+  }
+  const savedTone = stats.total_space_saved_bytes >= 0 ? "good" : "warn";
+  return (
+    <div className="statusGrid">
+      <Badge tone={savedTone}>{formatSignedBytes(stats.total_space_saved_bytes)} saved</Badge>
+      <div className="scanStats">
+        <span><strong>{stats.runs_started}</strong> runs started</span>
+        <span><strong>{stats.runs_succeeded}</strong> runs succeeded</span>
+        <span><strong>{stats.items_succeeded}</strong> items transcoded</span>
+        <span><strong>{stats.items_published}</strong> published</span>
+        <span><strong>{stats.items_cleaned}</strong> cleaned</span>
+        <span><strong>{stats.items_with_size_comparison}</strong> measured</span>
+      </div>
+      <div className="scanTiming">
+        <span>Total runtime {formatElapsed(stats.total_runtime_seconds * 1000)}</span>
+        <span>Before {formatBytes(stats.total_source_size_bytes)}</span>
+        <span>After {formatBytes(stats.total_output_size_bytes)}</span>
+        <span>Savings {stats.savings_percent.toFixed(1)}%</span>
+      </div>
+    </div>
+  );
+}
+
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="panel">
@@ -2048,13 +2124,19 @@ function toneFor(category?: string | null) {
 function formatBytes(value: number) {
   if (!value) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let next = value;
+  let next = Math.abs(value);
   let index = 0;
   while (next >= 1024 && index < units.length - 1) {
     next /= 1024;
     index += 1;
   }
-  return `${next.toFixed(index ? 1 : 0)} ${units[index]}`;
+  const prefix = value < 0 ? "-" : "";
+  return `${prefix}${next.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function formatSignedBytes(value: number) {
+  if (!value) return "0 B";
+  return `${value > 0 ? "+" : ""}${formatBytes(value)}`;
 }
 
 function formatDuration(value: number) {
