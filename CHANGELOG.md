@@ -4,7 +4,9 @@ This changelog summarizes the commits currently on `main`. New user-facing chang
 
 ## Unreleased
 
-- No unreleased changes.
+- Added transcode run cleanup for published items, including staged-output deletion, backup deletion, per-item cleanup status, and archive-on-success behavior.
+- Added transcode run archive/unarchive controls and hid archived runs by default.
+- Replaced the light/dark text toggle with icon-only sun/moon controls.
 
 ## Main Branch History
 

@@ -35,6 +35,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0002_archive_transcode_plans", db.migration_status()["applied"])
             self.assertIn("0003_publish_transcode_items", db.migration_status()["applied"])
             self.assertIn("0004_publish_progress", db.migration_status()["applied"])
+            self.assertIn("0005_transcode_run_cleanup_archive", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
@@ -129,6 +130,15 @@ class ProductionSmokeTest(unittest.TestCase):
                 len(b"original media bytes") + len(b"transcoded media bytes"),
             )
             self.assertEqual(list(media_dir.glob("*media-atlas-backup*")), [])
+            cleaned = transcode_manager.cleanup_run_artifacts(run_id, "DELETE ARTIFACTS")
+            self.assertEqual(source_path.read_bytes(), b"transcoded media bytes")
+            self.assertFalse(target_path.exists())
+            self.assertFalse(backup_path.exists())
+            self.assertTrue(cleaned["archived_at"])
+            cleaned_item = cleaned["items"][0]
+            self.assertEqual(cleaned_item["cleanup_status"], "cleaned")
+            self.assertTrue(cleaned_item["staged_deleted_at"])
+            self.assertTrue(cleaned_item["backup_deleted_at"])
 
             with TestClient(app) as client:
                 live = client.get("/api/health/live")

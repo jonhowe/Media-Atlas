@@ -279,8 +279,20 @@ main {
 }
 
 .themeToggle {
+  align-items: center;
   justify-content: center;
-  min-width: 104px;
+  padding: 8px;
+  width: 38px;
+}
+
+.themeToggle svg {
+  fill: none;
+  height: 18px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 18px;
 }
 
 .splash,

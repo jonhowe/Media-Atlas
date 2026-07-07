@@ -254,6 +254,7 @@ export type TranscodeRunSummary = {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  archived_at?: string | null;
   total_items: number;
   completed_items: number;
   failed_items: number;
@@ -275,6 +276,7 @@ export type TranscodeRun = {
   failed_items: number;
   canceled_items: number;
   progress_percent: number;
+  archived_at?: string | null;
   message?: string | null;
   items?: TranscodeRunItem[];
 };
@@ -305,5 +307,11 @@ export type TranscodeRunItem = {
   publish_progress_percent?: number | null;
   publish_bytes_done?: number | null;
   publish_bytes_total?: number | null;
+  cleanup_status?: string | null;
+  cleanup_message?: string | null;
+  cleanup_started_at?: string | null;
+  cleanup_finished_at?: string | null;
+  staged_deleted_at?: string | null;
+  backup_deleted_at?: string | null;
   warnings_json: string;
 };

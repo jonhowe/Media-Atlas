@@ -173,6 +173,8 @@ The UI requires two confirmations:
 
 The backend also requires the exact source path, staged output path, and confirmation text before it will publish. Publish fails if the staged output is missing, the item is not verified, the item was already published, or the original file/location is not writable.
 
+After you validate a published file in your media library, the Transcode Runs page can clean up artifacts for published items. Cleanup deletes the staged output and the original-file backup from transcode backup storage, records per-item cleanup status, and archives the run when cleanup succeeds. The UI requires confirmation plus typing `DELETE ARTIFACTS` before deleting these files.
+
 ## First Run Checklist
 
 After the container is running:
