@@ -281,6 +281,23 @@ export type TranscodeRun = {
   items?: TranscodeRunItem[];
 };
 
+export type TranscodeSavingsStats = {
+  runs_total: number;
+  runs_started: number;
+  runs_succeeded: number;
+  runs_archived: number;
+  items_total: number;
+  items_succeeded: number;
+  items_published: number;
+  items_cleaned: number;
+  items_with_size_comparison: number;
+  total_runtime_seconds: number;
+  total_source_size_bytes: number;
+  total_output_size_bytes: number;
+  total_space_saved_bytes: number;
+  savings_percent: number;
+};
+
 export type TranscodeRunItem = {
   id: number;
   status: string;
@@ -289,6 +306,8 @@ export type TranscodeRunItem = {
   command_display: string;
   log_path?: string | null;
   progress_percent: number;
+  source_size_bytes?: number | null;
+  output_size_bytes?: number | null;
   created_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
