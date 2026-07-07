@@ -828,8 +828,6 @@ async def list_transcode_runs(
         """,
         (limit,),
     )
-
-
 @app.get("/api/transcode-runs/stats")
 async def transcode_run_stats() -> dict[str, Any]:
     return transcode_savings_stats()
