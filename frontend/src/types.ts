@@ -279,6 +279,10 @@ export type TranscodeRun = {
   archived_at?: string | null;
   message?: string | null;
   items?: TranscodeRunItem[];
+  cleanup_summary?: {
+    run_archived?: boolean;
+    errors?: Array<{ item_id: number; message: string }>;
+  };
 };
 
 export type TranscodeSavingsStats = {

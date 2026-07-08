@@ -104,6 +104,10 @@ class CleanupRunRequest(BaseModel):
     archive_run: bool = True
 
 
+class CleanupRunItemRequest(BaseModel):
+    confirmation_text: str = Field(min_length=1)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -885,6 +889,19 @@ async def cleanup_transcode_run(run_id: int, payload: CleanupRunRequest) -> dict
             run_id,
             payload.confirmation_text,
             payload.archive_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/transcode-runs/{run_id}/items/{item_id}/cleanup")
+async def cleanup_transcode_item(run_id: int, item_id: int, payload: CleanupRunItemRequest) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(
+            transcode_manager.cleanup_item_artifacts,
+            run_id,
+            item_id,
+            payload.confirmation_text,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

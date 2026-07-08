@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -26,7 +29,8 @@ class ProductionSmokeTest(unittest.TestCase):
 
             from app import db
             from app.config import CONFIG
-            from app.main import app, transcode_manager
+            from app.main import app, scan_manager, transcode_manager
+            from app.services import scanner as scanner_module
             from app.services.transcodes import build_command, transcode_savings_stats
 
             db.init_db()
@@ -80,6 +84,45 @@ class ProductionSmokeTest(unittest.TestCase):
                 "hevc_vaapi",
                 build_command({"command_template": "hevc_vaapi"}, "/source.mkv", "/target.mkv") or [],
             )
+
+            async def scan_responsiveness_check() -> None:
+                scan_root = Path(temp_dir) / "scan-root"
+                scan_root.mkdir()
+                include_extensions, exclude_patterns = db.default_root_payload()
+                now = db.utc_now()
+                db.execute(
+                    """
+                    INSERT INTO media_roots (
+                        name, path, enabled, include_extensions_json, exclude_patterns_json, created_at, updated_at
+                    )
+                    VALUES (?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    ("Slow scan root", str(scan_root), include_extensions, exclude_patterns, now, now),
+                )
+                ticks = 0
+
+                def slow_discovery(root: dict) -> list[Path]:
+                    time.sleep(0.25)
+                    return []
+
+                async def ticker() -> None:
+                    nonlocal ticks
+                    deadline = time.monotonic() + 0.15
+                    while time.monotonic() < deadline:
+                        ticks += 1
+                        await asyncio.sleep(0.01)
+
+                with patch.object(scanner_module, "discover_media_files", side_effect=slow_discovery):
+                    scan = await scan_manager.start_scan()
+                    await ticker()
+                    self.assertGreater(ticks, 3)
+                    scan_manager.cancel_scan(scan["id"])
+                    await asyncio.sleep(0.2)
+                    finished_scan = db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan["id"],))
+                    self.assertIn(finished_scan["status"], {"canceled", "succeeded"})
+
+            asyncio.run(scan_responsiveness_check())
+
             media_dir = Path(temp_dir) / "media"
             media_dir.mkdir()
             source_path = media_dir / "Movie.mkv"
@@ -152,6 +195,74 @@ class ProductionSmokeTest(unittest.TestCase):
                 len(b"original media bytes") - len(b"transcoded media bytes"),
             )
 
+            partial_target = CONFIG.transcoder.staging_dir / "Partial.transcoded.mkv"
+            partial_target.write_bytes(b"partial transcoded media bytes")
+            other_target = CONFIG.transcoder.staging_dir / "Other.transcoded.mkv"
+            other_target.write_bytes(b"other transcoded media bytes")
+            partial_backup = CONFIG.transcoder.backup_dir / "run-partial" / "item-1" / "Partial.backup.mkv"
+            partial_backup.parent.mkdir(parents=True)
+            partial_backup.write_bytes(b"partial original media bytes")
+            partial_run_id = db.execute(
+                """
+                INSERT INTO transcode_runs (name, status, created_at, total_items, completed_items)
+                VALUES (?, 'succeeded', ?, 2, 2)
+                """,
+                ("Partial cleanup test", now),
+            )
+            partial_item_id = db.execute(
+                """
+                INSERT INTO transcode_run_items (
+                    run_id, status, source_path, target_path, command_json, command_display,
+                    verification_status, verification_message, warnings_json, created_at, finished_at,
+                    published_at, published_backup_path
+                )
+                VALUES (?, 'succeeded', ?, ?, ?, ?, 'verified', 'ok', '[]', ?, ?, ?, ?)
+                """,
+                (
+                    partial_run_id,
+                    str(media_dir / "Partial.mkv"),
+                    str(partial_target),
+                    '["ffmpeg"]',
+                    "ffmpeg",
+                    now,
+                    now,
+                    now,
+                    str(partial_backup),
+                ),
+            )
+            unpublished_item_id = db.execute(
+                """
+                INSERT INTO transcode_run_items (
+                    run_id, status, source_path, target_path, command_json, command_display,
+                    verification_status, verification_message, warnings_json, created_at, finished_at
+                )
+                VALUES (?, 'succeeded', ?, ?, ?, ?, 'verified', 'ok', '[]', ?, ?)
+                """,
+                (
+                    partial_run_id,
+                    str(media_dir / "Other.mkv"),
+                    str(other_target),
+                    '["ffmpeg"]',
+                    "ffmpeg",
+                    now,
+                    now,
+                ),
+            )
+            item_cleanup = transcode_manager.cleanup_item_artifacts(
+                partial_run_id,
+                partial_item_id,
+                "DELETE ARTIFACTS",
+            )
+            self.assertEqual(item_cleanup["cleanup_status"], "cleaned")
+            self.assertFalse(partial_target.exists())
+            self.assertFalse(partial_backup.exists())
+            self.assertTrue(other_target.exists())
+            with self.assertRaises(ValueError):
+                transcode_manager.cleanup_item_artifacts(partial_run_id, unpublished_item_id, "DELETE ARTIFACTS")
+            partial_bulk_cleanup = transcode_manager.cleanup_run_artifacts(partial_run_id, "DELETE ARTIFACTS")
+            self.assertIsNone(partial_bulk_cleanup["archived_at"])
+            self.assertFalse(partial_bulk_cleanup["cleanup_summary"]["run_archived"])
+
             with TestClient(app) as client:
                 live = client.get("/api/health/live")
                 self.assertEqual(live.status_code, 200)
@@ -164,6 +275,13 @@ class ProductionSmokeTest(unittest.TestCase):
                 stats = client.get("/api/transcode-runs/stats")
                 self.assertEqual(stats.status_code, 200)
                 self.assertEqual(stats.json()["items_with_size_comparison"], 1)
+
+                item_cleanup_response = client.post(
+                    f"/api/transcode-runs/{partial_run_id}/items/{partial_item_id}/cleanup",
+                    json={"confirmation_text": "DELETE ARTIFACTS"},
+                )
+                self.assertEqual(item_cleanup_response.status_code, 200)
+                self.assertEqual(item_cleanup_response.json()["cleanup_status"], "cleaned")
 
 
 if __name__ == "__main__":
