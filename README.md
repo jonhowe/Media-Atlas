@@ -208,16 +208,29 @@ See [Transcode Profiles](docs/TRANSCODE_PROFILES.md) for the full profile table,
 
 Configuration is environment-variable based. In Docker, variables in `.env` are consumed by `docker-compose.yml`; only variables listed under `environment` are passed into the container.
 
+### Mandatory Fields
+
+Set these intentionally for the recommended GHCR/Compose install. `MEDIA_ATLAS_ADMIN_PASSWORD` can be replaced by `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` if you prefer hashed secret storage.
+
+| Variable | Short description | Set ideally | Details |
+| --- | --- | --- | --- |
+| `MEDIA_ATLAS_MEDIA_ROOT` | Host media root | `.env` | Compose-only variable for the host path mounted into the container at `/media`. Required for normal Docker installs. |
+| `MEDIA_ATLAS_AUTH_MODE` | Access mode | `.env` | Access mode for UI/API. Supported values: `disabled`, `single_admin`, `reverse_proxy_trusted`. Recommended Docker default: `single_admin`. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD` | Admin password | `.env` | Password used by `single_admin` auth mode. Required if `MEDIA_ATLAS_AUTH_MODE=single_admin` unless `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` is used. Do not commit real values. |
+| `MEDIA_ATLAS_SESSION_SECRET` | Session signing secret | `.env` | HMAC secret for signed admin session cookies. Set a long random value in production. If omitted, sessions use an ephemeral secret and reset on restart. |
+| `MEDIA_ATLAS_ALLOWED_ORIGINS` | CORS origins | `.env` | Comma-separated browser origins allowed for API calls. Same-origin Docker installs usually use `http://127.0.0.1:8000,http://localhost:8000`; LAN or reverse proxy installs should include the actual browser origin. |
+
+### Optional Fields
+
+Most installs can leave these at the example defaults. Adjust them when changing ports, paths, auth mode, retention, hardware acceleration, Plex defaults, or local development behavior.
+
 | Variable | Short description | Set ideally | Details |
 | --- | --- | --- | --- |
 | `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN` | Acknowledge no-auth LAN bind | `.env` | Set to `true` only when `MEDIA_ATLAS_HOST=0.0.0.0` and `MEDIA_ATLAS_AUTH_MODE=disabled` are intentional for a trusted LAN/VPN. Without it, readiness warns. Default: `false`. |
-| `MEDIA_ATLAS_ADMIN_PASSWORD` | Admin password | `.env` | Password used by `single_admin` auth mode. Required for production if `MEDIA_ATLAS_AUTH_MODE=single_admin` unless `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` is used. Do not commit real values. |
-| `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` | Admin password hash | advanced env or secret manager | Optional PBKDF2 hash in `pbkdf2_sha256$iterations$salt$hash` format. Use this instead of `MEDIA_ATLAS_ADMIN_PASSWORD` if you do not want the cleartext password in `.env`. |
-| `MEDIA_ATLAS_ADMIN_USERNAME` | Admin username | `.env` | Username for `single_admin` auth mode. Default: `admin`. |
 | `MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS` | Directory browser roots | `.env` | Comma-separated list of server-visible root paths the UI directory browser may browse. In Docker, use container paths such as `/media`, not host paths such as `/mnt/media`. Default in Compose: `/media`. |
-| `MEDIA_ATLAS_ALLOWED_ORIGINS` | CORS origins | `.env` | Comma-separated browser origins allowed for API calls. Same-origin Docker installs usually use `http://127.0.0.1:8000,http://localhost:8000`; reverse proxy installs should include the HTTPS origin. |
 | `MEDIA_ATLAS_ALLOW_LAN` | LAN mode hint | advanced env | Informational flag derived from the bind host unless overridden. It is not the main security control; use auth settings for access control. |
-| `MEDIA_ATLAS_AUTH_MODE` | Access mode | `.env` | Access mode for UI/API. Supported values: `disabled`, `single_admin`, `reverse_proxy_trusted`. Recommended Docker default: `single_admin`. Local development default: `disabled`. |
+| `MEDIA_ATLAS_ADMIN_PASSWORD_HASH` | Admin password hash | advanced env or secret manager | Alternative to `MEDIA_ATLAS_ADMIN_PASSWORD`. Use a PBKDF2 hash in `pbkdf2_sha256$iterations$salt$hash` format if you do not want a cleartext password in `.env`. |
+| `MEDIA_ATLAS_ADMIN_USERNAME` | Admin username | `.env` | Username for `single_admin` auth mode. Default: `admin`. |
 | `MEDIA_ATLAS_BASE_DIR` | Local default base path | local dev `.env` | Base path used to derive default local `data`, `reports`, `logs`, and `transcode-staging` directories. Usually not used in Docker because explicit container paths are set. |
 | `MEDIA_ATLAS_DATABASE_PATH` | SQLite database file | advanced env | Full SQLite path. Usually leave unset so the app uses `MEDIA_ATLAS_DATA_DIR/media_inventory.sqlite`. Useful only for unusual layouts or migration testing. |
 | `MEDIA_ATLAS_DATA_DIR` | App data directory | `docker-compose.yml` environment | Directory containing SQLite data and backups. Docker default: `/app/data`, normally bind-mounted to `./data`. |
@@ -233,7 +246,6 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 | `MEDIA_ATLAS_LOG_RETENTION_DAYS` | Log retention days | `.env` | Number of days to keep old app/transcode log files when retention cleanup runs. Set `0` to disable log deletion. Default: `30`. |
 | `MEDIA_ATLAS_LOGS_DIR` | Logs directory | `docker-compose.yml` environment | Directory for app and transcode logs. Docker default: `/app/logs`, normally bind-mounted to `./logs`. |
 | `MEDIA_ATLAS_MARK_MISSING_FILES` | Mark missing files | `.env` | If `true`, rescans mark previously seen files as missing when the root is available but the file is gone. Unavailable roots are skipped so whole libraries are not marked missing accidentally. |
-| `MEDIA_ATLAS_MEDIA_ROOT` | Host media root | `.env` | Compose-only variable for the host path mounted read-only into the container at `/media`. Required for normal Docker installs. |
 | `MEDIA_ATLAS_PLEX_TOKEN` | Plex token default | `.env` or UI Settings | Optional default Plex token. It can also be saved from the Settings page. The API returns only redacted token state. |
 | `MEDIA_ATLAS_PLEX_URL` | Plex server URL default | `.env` or UI Settings | Optional default Plex server URL, for example `http://192.168.1.106:32400`. It can also be saved from the Settings page. |
 | `MEDIA_ATLAS_PORT` | HTTP port | `.env` and `docker-compose.yml` | In `.env`, controls the host port published by Compose. Inside the container, Compose passes `8000` as the application port. Local dev can set this directly. |
@@ -242,7 +254,6 @@ Configuration is environment-variable based. In Docker, variables in `.env` are 
 | `MEDIA_ATLAS_SCAN_CONCURRENCY` | Scan concurrency | `.env` | Maximum concurrent `ffprobe` tasks during scans. Default: `2`. Increase carefully on slow disks or network mounts. |
 | `MEDIA_ATLAS_SESSION_COOKIE_NAME` | Session cookie name | advanced env | Cookie name for signed admin sessions. Default: `media_atlas_session`. Change only if you run multiple Media Atlas instances on the same browser origin. |
 | `MEDIA_ATLAS_SESSION_COOKIE_SECURE` | Secure cookie flag | `.env` | Set to `true` when serving Media Atlas over HTTPS. Keep `false` for plain HTTP LAN testing. |
-| `MEDIA_ATLAS_SESSION_SECRET` | Session signing secret | `.env` | HMAC secret for signed admin session cookies. Set a long random value in production. If omitted, sessions use an ephemeral secret and reset on restart. |
 | `MEDIA_ATLAS_SESSION_TTL_SECONDS` | Session lifetime | advanced env | Admin session lifetime in seconds. Minimum enforced value is `300`. Default: `43200`. |
 | `MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS` | Partial output retention | `.env` | Deletes old quarantined partial retry outputs when greater than `0`. Completed staged outputs are not removed automatically. Default: `0`. |
 | `MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT` | Verification tolerance percent | `.env` | Percent-based duration tolerance for output verification. Default: `0.02`. The app uses the larger of this value and the seconds tolerance. |
