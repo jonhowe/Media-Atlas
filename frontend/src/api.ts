@@ -1,8 +1,17 @@
+let csrfToken: string | null = null;
+
+export function setCsrfToken(token?: string | null): void {
+  csrfToken = token || null;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase();
+  const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method);
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
+      ...(unsafe && csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
       ...(init?.headers || {})
     },
     ...init

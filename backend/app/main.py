@@ -19,13 +19,14 @@ from pydantic import BaseModel, Field
 
 from . import db
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
-from .health import admin_status, live_status, metrics_status, readiness_status
+from .health import admin_status, diagnostics_status, live_status, metrics_status, readiness_status
 from .logging_config import configure_logging
 from .security import (
     auth_status,
     clear_session_cookie,
     login,
     require_auth_response,
+    require_csrf_response,
     security_headers,
     set_session_cookie,
 )
@@ -51,7 +52,7 @@ from .services.transcodes import TranscodeManager, create_plan, get_plan, transc
 configure_logging()
 logger = logging.getLogger("media_atlas.requests")
 
-app = FastAPI(title="Media Atlas", version="0.1.0")
+app = FastAPI(title="Media Atlas", version=CONFIG.version.version)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CONFIG.operations.allowed_origins,
@@ -108,6 +109,11 @@ class CleanupRunItemRequest(BaseModel):
     confirmation_text: str = Field(min_length=1)
 
 
+class ValidateRunItemRequest(BaseModel):
+    confirmation_text: str = Field(min_length=1)
+    message: str | None = Field(default=None, max_length=500)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -133,6 +139,8 @@ async def request_security_middleware(request: Request, call_next: Any) -> Respo
     request_id = request.headers.get("X-Request-ID") or secrets.token_hex(8)
     started = time.perf_counter()
     response: Response | None = require_auth_response(request)
+    if response is None:
+        response = require_csrf_response(request)
     if response is None:
         response = await call_next(request)
     security_headers(response)
@@ -195,9 +203,10 @@ async def auth_me(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/auth/login")
-async def auth_login(payload: LoginRequest) -> Response:
+async def auth_login(payload: LoginRequest, request: Request) -> Response:
     try:
-        session = login(payload.username, payload.password)
+        client = request.client.host if request.client else "unknown"
+        session = login(payload.username, payload.password, client)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     response = JSONResponse({"authenticated": True, "username": payload.username})
@@ -247,6 +256,14 @@ async def settings() -> dict[str, Any]:
 @app.get("/api/admin/status")
 async def get_admin_status() -> dict[str, Any]:
     return admin_status()
+
+
+@app.get("/api/admin/diagnostics")
+async def get_admin_diagnostics() -> Response:
+    return JSONResponse(
+        diagnostics_status(),
+        headers={"Content-Disposition": 'attachment; filename="media-atlas-diagnostics.json"'},
+    )
 
 
 @app.get("/api/admin/stats")
@@ -902,6 +919,20 @@ async def cleanup_transcode_item(run_id: int, item_id: int, payload: CleanupRunI
             run_id,
             item_id,
             payload.confirmation_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/transcode-runs/{run_id}/items/{item_id}/validate")
+async def validate_transcode_item(run_id: int, item_id: int, payload: ValidateRunItemRequest) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(
+            transcode_manager.validate_item,
+            run_id,
+            item_id,
+            payload.confirmation_text,
+            payload.message,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

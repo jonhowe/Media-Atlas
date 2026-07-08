@@ -1,0 +1,6 @@
+services:
+  media-atlas:
+    volumes:
+      # Required only when you intentionally want the Publish action to replace
+      # original files. The default compose file mounts /media read-only.
+      - ${MEDIA_ATLAS_MEDIA_ROOT:?Set MEDIA_ATLAS_MEDIA_ROOT in .env}:/media:rw

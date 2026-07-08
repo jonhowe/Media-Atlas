@@ -17,6 +17,15 @@ def live_status() -> dict[str, Any]:
     return {"status": "alive"}
 
 
+def version_status() -> dict[str, Any]:
+    return {
+        "version": CONFIG.version.version,
+        "git_sha": CONFIG.version.git_sha,
+        "build_date": CONFIG.version.build_date,
+        "image_tag": CONFIG.version.image_tag,
+    }
+
+
 def readiness_status() -> dict[str, Any]:
     checks: dict[str, Any] = {
         "database": _database_check(),
@@ -44,6 +53,7 @@ def readiness_status() -> dict[str, Any]:
 def admin_status() -> dict[str, Any]:
     readiness = readiness_status()
     return {
+        "version": version_status(),
         "readiness": readiness,
         "auth": redacted_config(),
         "runtime_config": {
@@ -81,6 +91,20 @@ def admin_status() -> dict[str, Any]:
             "log_retention_days": CONFIG.operations.log_retention_days,
             "staged_output_retention_days": CONFIG.operations.staged_output_retention_days,
         },
+    }
+
+
+def diagnostics_status() -> dict[str, Any]:
+    status = admin_status()
+    return {
+        "generated_at": db.utc_now(),
+        "version": status["version"],
+        "runtime_config": status["runtime_config"],
+        "auth": status["auth"],
+        "readiness": status["readiness"],
+        "storage": status["storage"],
+        "recent_failures": status["recent_failures"],
+        "retention": status["retention"],
     }
 
 

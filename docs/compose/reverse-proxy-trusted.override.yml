@@ -1,0 +1,7 @@
+services:
+  media-atlas:
+    environment:
+      MEDIA_ATLAS_AUTH_MODE: "reverse_proxy_trusted"
+      MEDIA_ATLAS_TRUSTED_USER_HEADER: "${MEDIA_ATLAS_TRUSTED_USER_HEADER:-X-Forwarded-User}"
+      MEDIA_ATLAS_SESSION_COOKIE_SECURE: "${MEDIA_ATLAS_SESSION_COOKIE_SECURE:-true}"
+      MEDIA_ATLAS_ALLOWED_ORIGINS: "${MEDIA_ATLAS_ALLOWED_ORIGINS:?Set your external HTTPS origin}"

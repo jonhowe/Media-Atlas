@@ -84,6 +84,14 @@ class OperationsConfig:
 
 
 @dataclass(frozen=True)
+class VersionConfig:
+    version: str
+    git_sha: str
+    build_date: str
+    image_tag: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     host: str
     port: int
@@ -95,6 +103,7 @@ class AppConfig:
     directory_browser_enabled: bool
     allowed_browse_roots: list[Path]
     config_warnings: list[str]
+    version: VersionConfig
     auth: AuthConfig
     operations: OperationsConfig
     scanner: ScannerConfig
@@ -201,6 +210,12 @@ def load_config() -> AppConfig:
         directory_browser_enabled=_bool_env("MEDIA_ATLAS_DIRECTORY_BROWSER_ENABLED", True),
         allowed_browse_roots=allowed_browse_roots,
         config_warnings=config_warnings,
+        version=VersionConfig(
+            version=os.getenv("MEDIA_ATLAS_VERSION", "0.1.0"),
+            git_sha=os.getenv("MEDIA_ATLAS_GIT_SHA", "unknown"),
+            build_date=os.getenv("MEDIA_ATLAS_BUILD_DATE", "unknown"),
+            image_tag=os.getenv("MEDIA_ATLAS_IMAGE_TAG", "unknown"),
+        ),
         auth=AuthConfig(
             mode=auth_mode,  # type: ignore[arg-type]
             admin_username=os.getenv("MEDIA_ATLAS_ADMIN_USERNAME", "admin"),

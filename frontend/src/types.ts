@@ -34,10 +34,17 @@ export type AuthStatus = {
   authenticated: boolean;
   username?: string | null;
   configured: boolean;
+  csrf_token?: string | null;
   trusted_user_header?: string | null;
 };
 
 export type AdminStatus = {
+  version: {
+    version: string;
+    git_sha: string;
+    build_date: string;
+    image_tag: string;
+  };
   readiness: ReadinessStatus;
   auth: Record<string, unknown>;
   runtime_config: {
@@ -306,6 +313,7 @@ export type TranscodeSavingsStats = {
   items_total: number;
   items_succeeded: number;
   items_published: number;
+  items_validated: number;
   items_cleaned: number;
   items_with_size_comparison: number;
   total_runtime_seconds: number;
@@ -334,6 +342,8 @@ export type TranscodeRunItem = {
   verification_status?: string | null;
   verification_message?: string | null;
   published_at?: string | null;
+  validated_at?: string | null;
+  validation_message?: string | null;
   publish_status?: string | null;
   publish_message?: string | null;
   published_backup_path?: string | null;

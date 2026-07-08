@@ -37,6 +37,7 @@ Download the example Compose and environment files:
 ```bash
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/jonhowe/Media-Atlas/main/docker-compose.yml
 curl -fsSLo .env https://raw.githubusercontent.com/jonhowe/Media-Atlas/main/.env.docker.example
+curl -fsSLo media-atlas-doctor.sh https://raw.githubusercontent.com/jonhowe/Media-Atlas/main/scripts/media-atlas-doctor.sh
 ```
 
 Edit `.env` and set at least:
@@ -109,6 +110,7 @@ services:
 Start the app:
 
 ```bash
+bash media-atlas-doctor.sh
 docker compose pull
 docker compose up -d
 ```
@@ -122,6 +124,7 @@ http://SERVER_IP:8000/
 Useful commands:
 
 ```bash
+bash media-atlas-doctor.sh
 docker compose pull
 docker compose up -d
 docker compose logs -f media-atlas
@@ -133,6 +136,12 @@ Generate a stronger session secret with:
 
 ```bash
 openssl rand -hex 32
+```
+
+Generate an admin password hash instead of storing a cleartext password:
+
+```bash
+docker run --rm -it ghcr.io/jonhowe/media-atlas:latest python /app/scripts/generate-password-hash.py
 ```
 
 ## Paths And Volumes
@@ -158,6 +167,8 @@ Persistent app data is bind-mounted into the install directory:
 
 Source media is mounted read-only in the default Compose file. Staged transcode output is written separately. The manual publish action requires the media mount to be writable; keep the default read-only mount unless you intentionally want Media Atlas to replace originals.
 
+See [Deployment Guide](docs/DEPLOYMENT.md) for known-good Compose usage and optional overrides for writable publish mode, Intel VAAPI, NVIDIA NVENC, and reverse proxy auth.
+
 ## Publishing Transcoded Outputs
 
 Completed transcode items can be published from Transcode Runs when the item succeeded and output verification passed. Publishing copies the staged output over the original source path after moving the original file into transcode backup storage.
@@ -174,6 +185,8 @@ The UI requires two confirmations:
 The backend also requires the exact source path, staged output path, and confirmation text before it will publish. Publish fails if the staged output is missing, the item is not verified, the item was already published, or the original file/location is not writable.
 
 After you validate a published file in your media library, the Transcode Runs page can clean up artifacts for published items. Cleanup deletes the staged output and the original-file backup from transcode backup storage, records per-item cleanup status, and archives the run when cleanup succeeds. The UI requires confirmation plus typing `DELETE ARTIFACTS` before deleting these files.
+
+Published items must be marked validated before cleanup is available. This keeps cleanup tied to your explicit confirmation that the replacement is working in the live library.
 
 ## First Run Checklist
 
@@ -339,16 +352,11 @@ Source-based development setup is documented separately to keep the normal insta
 
 See [Development Install](docs/DEVELOPMENT.md).
 
-## Suggested Setup Improvements
+## Operations
 
-The current Docker Compose flow is workable, but these additions would make first-time setup smoother:
+Upgrade, rollback, backup/restore, environment troubleshooting, and publish recovery are covered in [Operations Runbook](docs/OPERATIONS.md).
 
-- Add a generated `.env` helper or `install.sh` that prompts for media root, admin password, session secret, host port, and optional Plex URL.
-- Add a first-run setup page that writes app settings for Plex URL/token and path mappings after authentication is configured.
-- Add a config validation command inside the container that prints missing required values, writable path checks, mounted media visibility, and auth mode warnings.
-- Publish a minimal `compose.yaml` plus a fuller `compose.example.yaml` for VAAPI/NVENC/reverse-proxy variants.
-- Add a README quick-start checklist with screenshots for adding a media root, running the first scan, configuring Plex path mappings, and starting the first staged transcode.
-- Add an in-app "copy diagnostics" button on Admin Status that redacts secrets and summarizes version, paths, mounts, tool availability, and recent failures.
+For a concise technical map of the app, see [Architecture](docs/ARCHITECTURE.md).
 
 ## Publishing
 
