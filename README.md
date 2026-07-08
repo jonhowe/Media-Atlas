@@ -368,3 +368,5 @@ GitHub Actions publishes images to GHCR.
 - Release tags publish matching image tags, for example `ghcr.io/jonhowe/media-atlas:v0.1.0`.
 - Every published image also gets a commit-pinned `sha-<commit>` tag.
 - Builds use GitHub Actions layer caching, Trivy scanning, SBOM attestations, and provenance attestations.
+
+Use the [Release Checklist](docs/RELEASE_CHECKLIST.md) before publishing a GitHub Release.
