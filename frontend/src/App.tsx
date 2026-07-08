@@ -586,6 +586,7 @@ function Directories({ onToast }: { onToast: (message: string) => void }) {
 
 function Scans({ onToast }: { onToast: (message: string) => void }) {
   const [scans, setScans] = useState<ScanJob[]>([]);
+  const [isStarting, setIsStarting] = useState(false);
   useEffect(() => {
     refresh();
     const timer = window.setInterval(refresh, 2000);
@@ -597,12 +598,16 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
   }
 
   async function start() {
+    const hadActiveScan = scans.some((scan) => ["queued", "running"].includes(scan.status));
     try {
-      await api("/api/scans", { method: "POST", body: "{}" });
+      setIsStarting(true);
+      const scan = await api<ScanJob>("/api/scans", { method: "POST", body: "{}" });
       await refresh();
-      onToast("Scan started.");
+      onToast(hadActiveScan || scan.status === "running" ? "Scan already running." : "Scan queued.");
     } catch (error) {
       onToast(String(error));
+    } finally {
+      setIsStarting(false);
     }
   }
 
@@ -617,10 +622,14 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
     onToast("Scan retry queued.");
   }
 
+  const hasActiveScan = scans.some((scan) => ["queued", "running"].includes(scan.status));
+
   return (
     <section className="stack">
       <div className="toolbar">
-        <button className="primary" onClick={start}>Start scan</button>
+        <button className="primary" onClick={start} disabled={isStarting || hasActiveScan}>
+          {isStarting ? "Starting..." : hasActiveScan ? "Scan running" : "Start scan"}
+        </button>
       </div>
       <Panel title="Scan Jobs">
         <table>
@@ -1151,6 +1160,12 @@ function canCleanupRun(run: TranscodeRun) {
   return Boolean(run.items?.some((item) => item.published_at && item.cleanup_status !== "cleaned"));
 }
 
+function canCleanupItem(item: TranscodeRunItem) {
+  return Boolean(item.published_at)
+    && item.cleanup_status !== "cleaned"
+    && item.cleanup_status !== "running";
+}
+
 function canArchiveRun(run: TranscodeRun) {
   return !["queued", "running"].includes(run.status);
 }
@@ -1238,11 +1253,11 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
 
   async function cleanupRun(run: TranscodeRun) {
     const firstConfirmed = window.confirm(
-      `Clean up staged outputs and backup files for published items in run #${run.id}?\n\nThis deletes staged transcode outputs and original-file backups for published items, then archives the run. Only do this after you have validated the published media.`
+      `Clean up staged outputs and backup files for published items in run #${run.id}?\n\nThis deletes staged transcode outputs and original-file backups only for published items. The run will be archived only if every item in the run has been published and cleaned.`
     );
     if (!firstConfirmed) return;
     const phrase = window.prompt(
-      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete eligible staged outputs and backups for run #${run.id}.`
+      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete eligible staged outputs and backups for published items in run #${run.id}.`
     );
     if (phrase !== "DELETE ARTIFACTS") {
       onToast("Cleanup canceled.");
@@ -1255,10 +1270,36 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
       });
       setSelected(updated);
       await refreshRuns();
-      onToast("Cleanup completed and run archived.");
+      onToast(updated.cleanup_summary?.run_archived ? "Cleanup completed and run archived." : "Cleanup completed for published items. Run remains visible.");
     } catch (error) {
       onToast(String(error));
       await refreshRun(run.id);
+    }
+  }
+
+  async function cleanupItem(runId: number, item: TranscodeRunItem) {
+    const firstConfirmed = window.confirm(
+      `Clean up artifacts for item #${item.id}?\n\nThis deletes the staged output and recorded original-file backup for this published item only. Only do this after you have validated the published media.`
+    );
+    if (!firstConfirmed) return;
+    const phrase = window.prompt(
+      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete artifacts for item #${item.id}.`
+    );
+    if (phrase !== "DELETE ARTIFACTS") {
+      onToast("Cleanup canceled.");
+      return;
+    }
+    try {
+      const cleaned = await api<TranscodeRunItem>(`/api/transcode-runs/${runId}/items/${item.id}/cleanup`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: phrase })
+      });
+      await refreshRun(runId);
+      await refreshRuns();
+      onToast(cleaned.cleanup_status === "failed" ? "Item cleanup failed. Check the item details." : "Item artifacts cleaned up.");
+    } catch (error) {
+      onToast(String(error));
+      await refreshRun(runId);
     }
   }
 
@@ -1375,7 +1416,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
           <div className="panelIntro">
             <p>{selected.message}</p>
             <div className="rowActions">
-              {canCleanupRun(selected) && <button className="danger" onClick={() => cleanupRun(selected)}>Clean up &amp; archive</button>}
+              {canCleanupRun(selected) && <button className="danger" onClick={() => cleanupRun(selected)}>Clean up published items</button>}
               {canArchiveRun(selected) && (selected.archived_at ? (
                 <button onClick={() => unarchiveRun(selected.id)}>Unarchive</button>
               ) : (
@@ -1486,6 +1527,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                   <td className="rowActions">
                     <button onClick={() => showLog(selected.id, item.id)}>Log</button>
                     {canPublishItem(item) && <button className="danger" onClick={() => publishItem(selected.id, item)}>Publish</button>}
+                    {canCleanupItem(item) && <button className="danger" onClick={() => cleanupItem(selected.id, item)}>Clean up</button>}
                   </td>
                 </tr>
               ))}

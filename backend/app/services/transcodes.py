@@ -225,82 +225,23 @@ class TranscodeManager:
         }
 
         for item in published_items:
-            if item.get("cleanup_status") == "cleaned":
+            result = self._cleanup_item_artifacts(item)
+            if result["skipped"]:
                 summary["items_skipped"] += 1
                 continue
-            item_id = item["id"]
-            started_at = db.utc_now()
-            db.execute(
-                """
-                UPDATE transcode_run_items
-                SET cleanup_status = 'running',
-                    cleanup_message = 'Cleaning up staged and backup artifacts.',
-                    cleanup_started_at = COALESCE(cleanup_started_at, ?),
-                    cleanup_finished_at = NULL
-                WHERE id = ?
-                """,
-                (started_at, item_id),
-            )
-            messages: list[str] = []
-            errors: list[str] = []
-            staged_deleted_at = None
-            backup_deleted_at = None
-
-            try:
-                deleted, message = _delete_artifact(Path(item["target_path"]), CONFIG.transcoder.staging_dir)
-                messages.append(f"Staged output: {message}")
-                if deleted:
-                    summary["staged_deleted"] += 1
-                    staged_deleted_at = db.utc_now()
-            except ValueError as exc:
-                errors.append(str(exc))
-
-            backup_path = item.get("published_backup_path")
-            if backup_path:
-                try:
-                    deleted, message = _delete_artifact(Path(backup_path), CONFIG.transcoder.backup_dir)
-                    messages.append(f"Backup: {message}")
-                    if deleted:
-                        summary["backups_deleted"] += 1
-                        backup_deleted_at = db.utc_now()
-                except ValueError as exc:
-                    errors.append(str(exc))
-            else:
-                messages.append("Backup: no backup path was recorded.")
-
-            finished_at = db.utc_now()
-            if errors:
-                message = "; ".join(errors + messages)
-                summary["errors"].append({"item_id": item_id, "message": message})
-                db.execute(
-                    """
-                    UPDATE transcode_run_items
-                    SET cleanup_status = 'failed',
-                        cleanup_message = ?,
-                        cleanup_finished_at = ?,
-                        staged_deleted_at = COALESCE(staged_deleted_at, ?),
-                        backup_deleted_at = COALESCE(backup_deleted_at, ?)
-                    WHERE id = ?
-                    """,
-                    (message, finished_at, staged_deleted_at, backup_deleted_at, item_id),
-                )
+            if result["staged_deleted"]:
+                summary["staged_deleted"] += 1
+            if result["backup_deleted"]:
+                summary["backups_deleted"] += 1
+            if result["errors"]:
+                summary["errors"].append({"item_id": item["id"], "message": result["message"]})
                 continue
-
             summary["items_cleaned"] += 1
-            db.execute(
-                """
-                UPDATE transcode_run_items
-                SET cleanup_status = 'cleaned',
-                    cleanup_message = ?,
-                    cleanup_finished_at = ?,
-                    staged_deleted_at = COALESCE(staged_deleted_at, ?),
-                    backup_deleted_at = COALESCE(backup_deleted_at, ?)
-                WHERE id = ?
-                """,
-                ("; ".join(messages), finished_at, staged_deleted_at, backup_deleted_at, item_id),
-            )
 
-        if archive_run and not summary["errors"]:
+        updated_items = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
+        all_items_cleaned = all(item.get("published_at") and item.get("cleanup_status") == "cleaned" for item in updated_items)
+
+        if archive_run and not summary["errors"] and all_items_cleaned:
             archived_at = db.utc_now()
             db.execute(
                 """
@@ -312,11 +253,136 @@ class TranscodeManager:
                 (archived_at, "Cleanup completed and run archived.", run_id),
             )
             summary["run_archived"] = True
+        elif archive_run and not summary["errors"]:
+            db.execute(
+                """
+                UPDATE transcode_runs
+                SET message = ?
+                WHERE id = ?
+                """,
+                ("Cleanup completed for published items. Run was not archived because some items are not published and cleaned.", run_id),
+            )
 
         updated = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,)) or run
         updated["items"] = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
         updated["cleanup_summary"] = summary
         return updated
+
+    def cleanup_item_artifacts(
+        self,
+        run_id: int,
+        item_id: int,
+        confirmation_text: str,
+    ) -> dict[str, Any]:
+        if confirmation_text != "DELETE ARTIFACTS":
+            raise ValueError("Cleanup requires the confirmation text DELETE ARTIFACTS.")
+        run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
+        if not run:
+            raise ValueError("Transcode run not found.")
+        if run["status"] in {"queued", "running"}:
+            raise ValueError("Active transcode run items cannot be cleaned up.")
+        item = db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id))
+        if not item:
+            raise ValueError("Transcode run item not found.")
+        if not item.get("published_at"):
+            raise ValueError("Only published transcode items can be cleaned up.")
+        self._cleanup_item_artifacts(item)
+        return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
+
+    def _cleanup_item_artifacts(self, item: dict[str, Any]) -> dict[str, Any]:
+        if item.get("cleanup_status") == "cleaned":
+            return {
+                "skipped": True,
+                "staged_deleted": False,
+                "backup_deleted": False,
+                "errors": [],
+                "message": item.get("cleanup_message") or "Item already cleaned.",
+            }
+        item_id = item["id"]
+        started_at = db.utc_now()
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET cleanup_status = 'running',
+                cleanup_message = 'Cleaning up staged and backup artifacts.',
+                cleanup_started_at = COALESCE(cleanup_started_at, ?),
+                cleanup_finished_at = NULL
+            WHERE id = ?
+            """,
+            (started_at, item_id),
+        )
+        messages: list[str] = []
+        errors: list[str] = []
+        staged_deleted_at = None
+        backup_deleted_at = None
+        staged_deleted = False
+        backup_deleted = False
+
+        try:
+            deleted, message = _delete_artifact(Path(item["target_path"]), CONFIG.transcoder.staging_dir)
+            messages.append(f"Staged output: {message}")
+            if deleted:
+                staged_deleted = True
+                staged_deleted_at = db.utc_now()
+        except ValueError as exc:
+            errors.append(str(exc))
+
+        backup_path = item.get("published_backup_path")
+        if backup_path:
+            try:
+                deleted, message = _delete_artifact(Path(backup_path), CONFIG.transcoder.backup_dir)
+                messages.append(f"Backup: {message}")
+                if deleted:
+                    backup_deleted = True
+                    backup_deleted_at = db.utc_now()
+            except ValueError as exc:
+                errors.append(str(exc))
+        else:
+            messages.append("Backup: no backup path was recorded.")
+
+        finished_at = db.utc_now()
+        if errors:
+            message = "; ".join(errors + messages)
+            db.execute(
+                """
+                UPDATE transcode_run_items
+                SET cleanup_status = 'failed',
+                    cleanup_message = ?,
+                    cleanup_finished_at = ?,
+                    staged_deleted_at = COALESCE(staged_deleted_at, ?),
+                    backup_deleted_at = COALESCE(backup_deleted_at, ?)
+                WHERE id = ?
+                """,
+                (message, finished_at, staged_deleted_at, backup_deleted_at, item_id),
+            )
+            return {
+                "skipped": False,
+                "staged_deleted": staged_deleted,
+                "backup_deleted": backup_deleted,
+                "errors": errors,
+                "message": message,
+            }
+
+        message = "; ".join(messages)
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET cleanup_status = 'cleaned',
+                cleanup_message = ?,
+                cleanup_finished_at = ?,
+                staged_deleted_at = COALESCE(staged_deleted_at, ?),
+                backup_deleted_at = COALESCE(backup_deleted_at, ?)
+            WHERE id = ?
+            """,
+            (message, finished_at, staged_deleted_at, backup_deleted_at, item_id),
+        )
+        return {
+            "skipped": False,
+            "staged_deleted": staged_deleted,
+            "backup_deleted": backup_deleted,
+            "errors": [],
+            "message": message,
+        }
 
     async def retry_run(self, run_id: int) -> dict[str, Any]:
         now = db.utc_now()

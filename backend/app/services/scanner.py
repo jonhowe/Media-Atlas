@@ -97,73 +97,10 @@ class ScanManager:
             (started_at, job_id),
         )
         roots = db.query_all("SELECT * FROM media_roots WHERE enabled = 1 ORDER BY name")
-        candidates: list[tuple[dict[str, Any], Path, os.stat_result]] = []
-        available_root_seen: dict[int, set[str]] = {}
-
         try:
-            for root in roots:
-                if self._is_cancel_requested(job_id):
-                    return self._finish(job_id, "canceled", "Scan canceled.")
-                root_path = Path(root["path"]).expanduser()
-                if not root_path.exists() or not root_path.is_dir():
-                    self._record_error(
-                        job_id,
-                        str(root_path),
-                        "Root path unavailable",
-                        "Root was unavailable; existing files were not marked missing.",
-                    )
-                    continue
-
-                seen: set[str] = set()
-                available_root_seen[root["id"]] = seen
-                paths = list(discover_media_files(root))
-                db.execute(
-                    """
-                    UPDATE scan_jobs
-                    SET total_files_discovered = total_files_discovered + ?,
-                        message = ?
-                    WHERE id = ?
-                    """,
-                    (len(paths), f"Discovered {len(paths)} files under {root['name']}.", job_id),
-                )
-                for path in paths:
-                    if self._is_cancel_requested(job_id):
-                        return self._finish(job_id, "canceled", "Scan canceled.")
-                    resolved = str(path.resolve())
-                    seen.add(resolved)
-                    try:
-                        stat_result = path.stat()
-                    except OSError as exc:
-                        self._record_error(job_id, resolved, "File not readable", str(exc))
-                        self._increment(job_id, "files_failed")
-                        continue
-                    existing = db.query_one("SELECT * FROM files WHERE path = ?", (resolved,))
-                    if (
-                        existing
-                        and existing["size_bytes"] == stat_result.st_size
-                        and existing["modified_time_ns"] == stat_result.st_mtime_ns
-                        and not existing.get("probe_error")
-                    ):
-                        now = db.utc_now()
-                        db.execute(
-                            """
-                            UPDATE files
-                            SET last_seen_at = ?, is_missing = 0, missing_since = NULL, updated_at = ?
-                            WHERE id = ?
-                            """,
-                            (now, now, existing["id"]),
-                        )
-                        self._increment(job_id, "files_skipped")
-                    else:
-                        candidates.append((root, path, stat_result))
-
-                if CONFIG.scanner.mark_missing_files:
-                    self._mark_missing(root["id"], seen)
-                db.execute(
-                    "UPDATE media_roots SET last_scanned_at = ?, updated_at = ? WHERE id = ?",
-                    (db.utc_now(), db.utc_now(), root["id"]),
-                )
-
+            candidates, canceled = await asyncio.to_thread(self._discover_candidates, job_id, roots)
+            if canceled:
+                return
             semaphore = asyncio.Semaphore(CONFIG.scanner.concurrency)
             await asyncio.gather(
                 *(self._probe_candidate(job_id, root, path, stat_result, semaphore) for root, path, stat_result in candidates)
@@ -173,6 +110,77 @@ class ScanManager:
             self._finish(job_id, status, message)
         except Exception as exc:
             self._finish(job_id, "failed", f"Scan failed: {exc}")
+
+    def _discover_candidates(
+        self,
+        job_id: int,
+        roots: list[dict[str, Any]],
+    ) -> tuple[list[tuple[dict[str, Any], Path, os.stat_result]], bool]:
+        candidates: list[tuple[dict[str, Any], Path, os.stat_result]] = []
+        for root in roots:
+            if self._is_cancel_requested(job_id):
+                self._finish(job_id, "canceled", "Scan canceled.")
+                return candidates, True
+            root_path = Path(root["path"]).expanduser()
+            if not root_path.exists() or not root_path.is_dir():
+                self._record_error(
+                    job_id,
+                    str(root_path),
+                    "Root path unavailable",
+                    "Root was unavailable; existing files were not marked missing.",
+                )
+                continue
+
+            seen: set[str] = set()
+            paths = list(discover_media_files(root))
+            db.execute(
+                """
+                UPDATE scan_jobs
+                SET total_files_discovered = total_files_discovered + ?,
+                    message = ?
+                WHERE id = ?
+                """,
+                (len(paths), f"Discovered {len(paths)} files under {root['name']}.", job_id),
+            )
+            for path in paths:
+                if self._is_cancel_requested(job_id):
+                    self._finish(job_id, "canceled", "Scan canceled.")
+                    return candidates, True
+                resolved = str(path.resolve())
+                seen.add(resolved)
+                try:
+                    stat_result = path.stat()
+                except OSError as exc:
+                    self._record_error(job_id, resolved, "File not readable", str(exc))
+                    self._increment(job_id, "files_failed")
+                    continue
+                existing = db.query_one("SELECT * FROM files WHERE path = ?", (resolved,))
+                if (
+                    existing
+                    and existing["size_bytes"] == stat_result.st_size
+                    and existing["modified_time_ns"] == stat_result.st_mtime_ns
+                    and not existing.get("probe_error")
+                ):
+                    now = db.utc_now()
+                    db.execute(
+                        """
+                        UPDATE files
+                        SET last_seen_at = ?, is_missing = 0, missing_since = NULL, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, now, existing["id"]),
+                    )
+                    self._increment(job_id, "files_skipped")
+                else:
+                    candidates.append((root, path, stat_result))
+
+            if CONFIG.scanner.mark_missing_files:
+                self._mark_missing(root["id"], seen)
+            db.execute(
+                "UPDATE media_roots SET last_scanned_at = ?, updated_at = ? WHERE id = ?",
+                (db.utc_now(), db.utc_now(), root["id"]),
+            )
+        return candidates, False
 
     async def _probe_candidate(
         self,
@@ -192,18 +200,28 @@ class ScanManager:
             )
             try:
                 raw = await probe_file(path)
-                normalized = normalize_probe(path.resolve(), stat_result, raw)
-                normalized["root_id"] = root["id"]
-                recommendation = recommend(normalized)
-                file_id = self._upsert_file(normalized, recommendation)
-                self._replace_streams(file_id, normalized["streams"], normalized["chapters"])
-                self._increment(job_id, "files_probed")
+                await asyncio.to_thread(self._save_probe_success, job_id, root, path, stat_result, raw)
             except ProbeError as exc:
-                self._save_probe_error(job_id, root, path, stat_result, exc)
-                self._increment(job_id, "files_failed")
+                await asyncio.to_thread(self._save_probe_error, job_id, root, path, stat_result, exc)
+                await asyncio.to_thread(self._increment, job_id, "files_failed")
             except Exception as exc:
-                self._record_error(job_id, resolved, "Scan processing error", str(exc))
-                self._increment(job_id, "files_failed")
+                await asyncio.to_thread(self._record_error, job_id, resolved, "Scan processing error", str(exc))
+                await asyncio.to_thread(self._increment, job_id, "files_failed")
+
+    def _save_probe_success(
+        self,
+        job_id: int,
+        root: dict[str, Any],
+        path: Path,
+        stat_result: os.stat_result,
+        raw: dict[str, Any],
+    ) -> None:
+        normalized = normalize_probe(path.resolve(), stat_result, raw)
+        normalized["root_id"] = root["id"]
+        recommendation = recommend(normalized)
+        file_id = self._upsert_file(normalized, recommendation)
+        self._replace_streams(file_id, normalized["streams"], normalized["chapters"])
+        self._increment(job_id, "files_probed")
 
     def _upsert_file(self, item: dict[str, Any], recommendation: dict[str, Any]) -> int:
         now = db.utc_now()
