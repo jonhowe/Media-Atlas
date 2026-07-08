@@ -10,7 +10,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ARG MEDIA_ATLAS_VERSION=0.1.0
 ARG MEDIA_ATLAS_GIT_SHA=unknown
