@@ -35,8 +35,22 @@ jobs:
           python -m pip install -r requirements.txt
           python -m unittest discover -s tests
 
+      - name: Validate Compose environment mapping
+        run: |
+          cp .env.docker.example .env
+          docker compose config >/tmp/media-atlas-compose.yml
+          grep -q "MEDIA_ATLAS_AUTH_MODE" /tmp/media-atlas-compose.yml
+          grep -q "MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN" /tmp/media-atlas-compose.yml
+          grep -q "MEDIA_ATLAS_TRANSCODE_BACKUP_DIR" /tmp/media-atlas-compose.yml
+          grep -q "MEDIA_ATLAS_ALLOWED_ORIGINS" /tmp/media-atlas-compose.yml
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Compute build metadata
+        id: build-meta
+        shell: bash
+        run: echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         uses: docker/build-push-action@v6
@@ -46,6 +60,10 @@ jobs:
           push: false
           load: true
           tags: media-atlas:ci-test
+          build-args: |
+            MEDIA_ATLAS_GIT_SHA=${{ github.sha }}
+            MEDIA_ATLAS_BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
+            MEDIA_ATLAS_IMAGE_TAG=ci-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -59,6 +77,7 @@ jobs:
           set -euo pipefail
           trap 'docker rm -f media-atlas-ci >/dev/null 2>&1 || true' EXIT
           docker run -d --name media-atlas-ci -p 8000:8000 \
+            -e MEDIA_ATLAS_AUTH_MODE=disabled \
             -e MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN=true \
             media-atlas:ci-test
           for _ in $(seq 1 30); do

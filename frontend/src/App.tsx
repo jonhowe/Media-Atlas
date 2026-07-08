@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, apiText, exportUrl } from "./api";
+import { api, apiText, exportUrl, setCsrfToken } from "./api";
 import type {
   AdminStatus,
   AuthStatus,
@@ -116,14 +116,18 @@ export default function App() {
 
   async function refreshAuth() {
     try {
-      setAuth(await api<AuthStatus>("/api/auth/me"));
+      const nextAuth = await api<AuthStatus>("/api/auth/me");
+      setCsrfToken(nextAuth.csrf_token);
+      setAuth(nextAuth);
     } catch {
+      setCsrfToken(null);
       setAuth({ mode: "disabled", authenticated: true, configured: true, username: "local" });
     }
   }
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST", body: "{}" });
+    setCsrfToken(null);
     await refreshAuth();
   }
 
@@ -1191,13 +1195,18 @@ function isPublishingItem(item: TranscodeRunItem) {
 }
 
 function canCleanupRun(run: TranscodeRun) {
-  return Boolean(run.items?.some((item) => item.published_at && item.cleanup_status !== "cleaned"));
+  return Boolean(run.items?.some((item) => item.published_at && item.validated_at && item.cleanup_status !== "cleaned"));
 }
 
 function canCleanupItem(item: TranscodeRunItem) {
   return Boolean(item.published_at)
+    && Boolean(item.validated_at)
     && item.cleanup_status !== "cleaned"
     && item.cleanup_status !== "running";
+}
+
+function canValidateItem(item: TranscodeRunItem) {
+  return Boolean(item.published_at) && !item.validated_at && item.cleanup_status !== "cleaned";
 }
 
 function canArchiveRun(run: TranscodeRun) {
@@ -1287,11 +1296,11 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
 
   async function cleanupRun(run: TranscodeRun) {
     const firstConfirmed = window.confirm(
-      `Clean up staged outputs and backup files for published items in run #${run.id}?\n\nThis deletes staged transcode outputs and original-file backups only for published items. The run will be archived only if every item in the run has been published and cleaned.`
+      `Clean up staged outputs and backup files for validated published items in run #${run.id}?\n\nThis deletes staged transcode outputs and original-file backups only for items you have marked validated. The run will be archived only if every item in the run has been published, validated, and cleaned.`
     );
     if (!firstConfirmed) return;
     const phrase = window.prompt(
-      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete eligible staged outputs and backups for published items in run #${run.id}.`
+      `Final confirmation required.\n\nType DELETE ARTIFACTS to permanently delete eligible staged outputs and backups for validated published items in run #${run.id}.`
     );
     if (phrase !== "DELETE ARTIFACTS") {
       onToast("Cleanup canceled.");
@@ -1304,7 +1313,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
       });
       setSelected(updated);
       await refreshRuns();
-      onToast(updated.cleanup_summary?.run_archived ? "Cleanup completed and run archived." : "Cleanup completed for published items. Run remains visible.");
+      onToast(updated.cleanup_summary?.run_archived ? "Cleanup completed and run archived." : "Cleanup completed for validated published items. Run remains visible.");
     } catch (error) {
       onToast(String(error));
       await refreshRun(run.id);
@@ -1337,9 +1346,42 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
     }
   }
 
-  async function publishItem(runId: number, item: TranscodeRunItem) {
+  async function validateItem(runId: number, item: TranscodeRunItem) {
     const firstConfirmed = window.confirm(
-      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\nMedia Atlas will move the original file into transcode backup storage, then copy the staged output into the original path.`
+      `Mark item #${item.id} as validated?\n\nOnly do this after you have checked the published media in your library and are comfortable allowing cleanup of its staged output and backup.`
+    );
+    if (!firstConfirmed) return;
+    const phrase = window.prompt(
+      `Final confirmation required.\n\nType VALIDATED to record validation for item #${item.id}.`
+    );
+    if (phrase !== "VALIDATED") {
+      onToast("Validation canceled.");
+      return;
+    }
+    try {
+      await api<TranscodeRunItem>(`/api/transcode-runs/${runId}/items/${item.id}/validate`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: phrase })
+      });
+      await refreshRun(runId);
+      await refreshRuns();
+      onToast("Published item marked validated.");
+    } catch (error) {
+      onToast(String(error));
+      await refreshRun(runId);
+    }
+  }
+
+  async function publishItem(runId: number, item: TranscodeRunItem) {
+    const sizeSummary = [
+      item.source_size_bytes != null ? `Original size: ${formatBytes(item.source_size_bytes)}` : null,
+      item.output_size_bytes != null ? `Staged size: ${formatBytes(item.output_size_bytes)}` : null,
+      item.source_size_bytes != null && item.output_size_bytes != null
+        ? `Estimated change: ${formatSignedBytes(item.source_size_bytes - item.output_size_bytes)}`
+        : null
+    ].filter(Boolean).join("\n");
+    const firstConfirmed = window.confirm(
+      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\n${sizeSummary ? `${sizeSummary}\n\n` : ""}Media Atlas will move the original file into transcode backup storage, then copy the staged output into the original path.`
     );
     if (!firstConfirmed) return;
     const phrase = window.prompt(
@@ -1450,7 +1492,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
           <div className="panelIntro">
             <p>{selected.message}</p>
             <div className="rowActions">
-              {canCleanupRun(selected) && <button className="danger" onClick={() => cleanupRun(selected)}>Clean up published items</button>}
+              {canCleanupRun(selected) && <button className="danger" onClick={() => cleanupRun(selected)}>Clean up validated items</button>}
               {canArchiveRun(selected) && (selected.archived_at ? (
                 <button onClick={() => unarchiveRun(selected.id)}>Unarchive</button>
               ) : (
@@ -1542,6 +1584,12 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                             <span>Duration {formatPublishDuration(item)}</span>
                           </div>
                           {item.published_at && <span className="muted">Published {formatDateTime(item.published_at)}</span>}
+                          {item.validated_at ? (
+                            <span className="muted">Validated {formatDateTime(item.validated_at)}</span>
+                          ) : item.published_at ? (
+                            <span className="muted">Validation pending</span>
+                          ) : null}
+                          {item.validation_message && <span className="muted">{item.validation_message}</span>}
                           {item.published_backup_path && <span className="muted">Backup {item.published_backup_path}</span>}
                           {item.cleanup_status && (
                             <div className="scanTiming">
@@ -1561,6 +1609,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                   <td className="rowActions">
                     <button onClick={() => showLog(selected.id, item.id)}>Log</button>
                     {canPublishItem(item) && <button className="danger" onClick={() => publishItem(selected.id, item)}>Publish</button>}
+                    {canValidateItem(item) && <button onClick={() => validateItem(selected.id, item)}>Mark validated</button>}
                     {canCleanupItem(item) && <button className="danger" onClick={() => cleanupItem(selected.id, item)}>Clean up</button>}
                   </td>
                 </tr>
@@ -1628,6 +1677,18 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
       )}
       <Panel title="Runtime Configuration">
         <div className="statusGrid">
+          <div className="storageRow">
+            <strong>Version</strong>
+            <span>{status.version.version}</span>
+            <span>Image</span>
+            <span className="path">{status.version.image_tag}</span>
+          </div>
+          <div className="storageRow">
+            <strong>Build</strong>
+            <span className="path">{status.version.build_date}</span>
+            <span>Git SHA</span>
+            <span className="path">{status.version.git_sha}</span>
+          </div>
           <div className="storageRow">
             <strong>Bind address</strong>
             <span className="path">{runtimeConfig.host}:{runtimeConfig.port}</span>
@@ -1705,9 +1766,10 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
         <Panel title="Maintenance">
           <div className="rowActions">
             <a className="button" href="/api/admin/database-backup">Download database backup</a>
+            <a className="button" href="/api/admin/diagnostics">Download diagnostics</a>
             <button onClick={runRetention}>Run retention cleanup</button>
           </div>
-          <pre className="json">{JSON.stringify({ auth: status.auth, runtime_config: runtimeConfig, retention: status.retention, migrations: readiness.migrations }, null, 2)}</pre>
+          <pre className="json">{JSON.stringify({ version: status.version, auth: status.auth, runtime_config: runtimeConfig, retention: status.retention, migrations: readiness.migrations }, null, 2)}</pre>
         </Panel>
       </div>
     </section>
@@ -2102,6 +2164,7 @@ function TranscodeSavingsPanel({ stats }: { stats: TranscodeSavingsStats | null 
         <span><strong>{stats.runs_succeeded}</strong> runs succeeded</span>
         <span><strong>{stats.items_succeeded}</strong> items transcoded</span>
         <span><strong>{stats.items_published}</strong> published</span>
+        <span><strong>{stats.items_validated}</strong> validated</span>
         <span><strong>{stats.items_cleaned}</strong> cleaned</span>
         <span><strong>{stats.items_with_size_comparison}</strong> measured</span>
       </div>

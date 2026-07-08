@@ -15,6 +15,16 @@ from fastapi.responses import JSONResponse, Response
 from .config import CONFIG
 
 LOGGER = logging.getLogger("media_atlas.security")
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+CSRF_EXEMPT_PATHS = {
+    "/api/auth/login",
+    "/api/health",
+    "/api/health/live",
+    "/api/health/ready",
+}
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_MAX_FAILURES = 8
+_LOGIN_FAILURES: dict[str, list[float]] = {}
 
 PUBLIC_API_PATHS = {
     "/api/auth/login",
@@ -33,6 +43,7 @@ def auth_status(request: Request) -> dict[str, Any]:
         "authenticated": bool(user),
         "username": user,
         "configured": auth_configured(),
+        "csrf_token": csrf_token(request) if user and CONFIG.auth.mode != "disabled" else None,
         "trusted_user_header": CONFIG.auth.trusted_user_header
         if CONFIG.auth.mode == "reverse_proxy_trusted"
         else None,
@@ -69,15 +80,47 @@ def require_auth_response(request: Request) -> Response | None:
     return JSONResponse({"detail": "Authentication required."}, status_code=401)
 
 
-def login(username: str, password: str) -> str:
+def require_csrf_response(request: Request) -> Response | None:
+    if CONFIG.auth.mode == "disabled":
+        return None
+    if request.method.upper() not in UNSAFE_METHODS:
+        return None
+    if not request.url.path.startswith("/api/"):
+        return None
+    if request.url.path in CSRF_EXEMPT_PATHS:
+        return None
+    expected = csrf_token(request)
+    supplied = request.headers.get("X-CSRF-Token", "")
+    if expected and hmac.compare_digest(supplied, expected):
+        return None
+    return JSONResponse({"detail": "CSRF token missing or invalid."}, status_code=403)
+
+
+def csrf_token(request: Request) -> str | None:
+    principal = _csrf_principal(request)
+    if not principal:
+        return None
+    digest = hmac.new(
+        _session_secret().encode("utf-8"),
+        f"csrf:{CONFIG.auth.mode}:{principal}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return _b64(digest)
+
+
+def login(username: str, password: str, client_id: str = "unknown") -> str:
     if CONFIG.auth.mode != "single_admin":
         raise ValueError("Password login is only available in single_admin auth mode.")
     if not auth_configured():
         raise ValueError("Admin auth is enabled but no admin password or password hash is configured.")
+    _check_login_rate_limit(username, client_id)
     if username != CONFIG.auth.admin_username:
+        _record_login_failure(username, client_id)
         raise ValueError("Invalid username or password.")
     if not _password_matches(password):
+        _record_login_failure(username, client_id)
         raise ValueError("Invalid username or password.")
+    _clear_login_failures(username, client_id)
     return _sign_session(username)
 
 
@@ -144,6 +187,42 @@ def _session_secret() -> str:
         setattr(_session_secret, "_generated", secret)
         LOGGER.warning("Using an ephemeral session secret because MEDIA_ATLAS_SESSION_SECRET is not set.")
     return secret
+
+
+def _csrf_principal(request: Request) -> str | None:
+    if CONFIG.auth.mode == "single_admin":
+        return request.cookies.get(CONFIG.auth.session_cookie_name)
+    if CONFIG.auth.mode == "reverse_proxy_trusted":
+        header = CONFIG.auth.trusted_user_header
+        return request.headers.get(header) or request.headers.get(header.lower())
+    return None
+
+
+def _login_key(username: str, client_id: str) -> str:
+    return f"{client_id}:{username}"
+
+
+def _pruned_failures(username: str, client_id: str) -> list[float]:
+    key = _login_key(username, client_id)
+    now = time.time()
+    failures = [value for value in _LOGIN_FAILURES.get(key, []) if now - value < LOGIN_WINDOW_SECONDS]
+    _LOGIN_FAILURES[key] = failures
+    return failures
+
+
+def _check_login_rate_limit(username: str, client_id: str) -> None:
+    if len(_pruned_failures(username, client_id)) >= LOGIN_MAX_FAILURES:
+        raise ValueError("Too many failed login attempts. Try again later.")
+
+
+def _record_login_failure(username: str, client_id: str) -> None:
+    failures = _pruned_failures(username, client_id)
+    failures.append(time.time())
+    _LOGIN_FAILURES[_login_key(username, client_id)] = failures
+
+
+def _clear_login_failures(username: str, client_id: str) -> None:
+    _LOGIN_FAILURES.pop(_login_key(username, client_id), None)
 
 
 def _sign_session(username: str) -> str:

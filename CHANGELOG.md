@@ -4,6 +4,15 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Added Admin Status version/build metadata and a redacted diagnostics JSON export.
+- Added a Compose/env doctor script plus deployment and operations runbooks.
+- Changed the Docker image default auth mode to `single_admin` for safer LAN/VPN installs.
+- Added CSRF protection for cookie-authenticated write APIs and basic login rate limiting.
+- Added explicit published-item validation before staged/backup artifact cleanup.
+- Added performance indexes for common library, Plex, scan, and transcode history queries.
+- Added Compose override examples for writable publish mode, Intel VAAPI, NVIDIA NVENC, and trusted reverse proxy auth.
+- Added Dependabot configuration for npm, pip, Docker, and GitHub Actions updates.
+- Added repo hygiene ignores for `.DS_Store` and `transcode-backups`, and archived the original project plan under `docs/archive`.
 - Clarified Intel Linux hardware-transcoding guidance to recommend `HEVC VAAPI` first when `/dev/dri` and the Intel iHD driver are available.
 - Documented that `HEVC Quick Sync` / `hevc_qsv` may still fail depending on FFmpeg QSV runtime support, even when VAAPI works.
 

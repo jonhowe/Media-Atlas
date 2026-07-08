@@ -59,6 +59,7 @@ def transcode_savings_stats() -> dict[str, Any]:
         "items_total": len(items),
         "items_succeeded": sum(1 for item in items if item.get("status") == "succeeded"),
         "items_published": sum(1 for item in items if item.get("published_at")),
+        "items_validated": sum(1 for item in items if item.get("validated_at")),
         "items_cleaned": sum(1 for item in items if item.get("cleanup_status") == "cleaned"),
         "items_with_size_comparison": measured_items,
         "total_runtime_seconds": round(item_runtime_seconds, 2),
@@ -210,12 +211,12 @@ class TranscodeManager:
             raise ValueError("Active transcode runs cannot be cleaned up.")
 
         items = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
-        published_items = [item for item in items if item.get("published_at")]
-        if not published_items:
-            raise ValueError("No published transcode items are available for cleanup.")
+        eligible_items = [item for item in items if item.get("published_at") and item.get("validated_at")]
+        if not eligible_items:
+            raise ValueError("No validated, published transcode items are available for cleanup.")
 
         summary: dict[str, Any] = {
-            "items_seen": len(published_items),
+            "items_seen": len(eligible_items),
             "items_cleaned": 0,
             "items_skipped": 0,
             "errors": [],
@@ -224,7 +225,7 @@ class TranscodeManager:
             "run_archived": False,
         }
 
-        for item in published_items:
+        for item in eligible_items:
             result = self._cleanup_item_artifacts(item)
             if result["skipped"]:
                 summary["items_skipped"] += 1
@@ -239,7 +240,10 @@ class TranscodeManager:
             summary["items_cleaned"] += 1
 
         updated_items = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
-        all_items_cleaned = all(item.get("published_at") and item.get("cleanup_status") == "cleaned" for item in updated_items)
+        all_items_cleaned = all(
+            item.get("published_at") and item.get("validated_at") and item.get("cleanup_status") == "cleaned"
+            for item in updated_items
+        )
 
         if archive_run and not summary["errors"] and all_items_cleaned:
             archived_at = db.utc_now()
@@ -260,7 +264,7 @@ class TranscodeManager:
                 SET message = ?
                 WHERE id = ?
                 """,
-                ("Cleanup completed for published items. Run was not archived because some items are not published and cleaned.", run_id),
+                ("Cleanup completed for validated published items. Run was not archived because some items are not published, validated, and cleaned.", run_id),
             )
 
         updated = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,)) or run
@@ -286,7 +290,35 @@ class TranscodeManager:
             raise ValueError("Transcode run item not found.")
         if not item.get("published_at"):
             raise ValueError("Only published transcode items can be cleaned up.")
+        if not item.get("validated_at"):
+            raise ValueError("Published transcode items must be marked validated before cleanup.")
         self._cleanup_item_artifacts(item)
+        return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
+
+    def validate_item(
+        self,
+        run_id: int,
+        item_id: int,
+        confirmation_text: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        if confirmation_text != "VALIDATED":
+            raise ValueError("Validation requires the confirmation text VALIDATED.")
+        item = db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id))
+        if not item:
+            raise ValueError("Transcode run item not found.")
+        if not item.get("published_at"):
+            raise ValueError("Only published transcode items can be marked validated.")
+        now = db.utc_now()
+        db.execute(
+            """
+            UPDATE transcode_run_items
+            SET validated_at = COALESCE(validated_at, ?),
+                validation_message = COALESCE(validation_message, ?)
+            WHERE id = ? AND run_id = ?
+            """,
+            (now, message or "User validated published output.", item_id, run_id),
+        )
         return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
 
     def _cleanup_item_artifacts(self, item: dict[str, Any]) -> dict[str, Any]:

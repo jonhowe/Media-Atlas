@@ -204,10 +204,12 @@ cython_debug/
 tempCodeRunnerFile.py
 
 # Media Atlas runtime state
+.DS_Store
 data/
 reports/
 logs/
 transcode-staging/
+transcode-backups/
 media/
 
 # Frontend dependencies and builds

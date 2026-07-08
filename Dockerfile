@@ -12,8 +12,17 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
+ARG MEDIA_ATLAS_VERSION=0.1.0
+ARG MEDIA_ATLAS_GIT_SHA=unknown
+ARG MEDIA_ATLAS_BUILD_DATE=unknown
+ARG MEDIA_ATLAS_IMAGE_TAG=local
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    MEDIA_ATLAS_VERSION=${MEDIA_ATLAS_VERSION} \
+    MEDIA_ATLAS_GIT_SHA=${MEDIA_ATLAS_GIT_SHA} \
+    MEDIA_ATLAS_BUILD_DATE=${MEDIA_ATLAS_BUILD_DATE} \
+    MEDIA_ATLAS_IMAGE_TAG=${MEDIA_ATLAS_IMAGE_TAG} \
     MEDIA_ATLAS_HOST=0.0.0.0 \
     MEDIA_ATLAS_PORT=8000 \
     MEDIA_ATLAS_DATA_DIR=/app/data \
@@ -31,7 +40,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_SECONDS=3 \
     MEDIA_ATLAS_TRANSCODE_DURATION_TOLERANCE_PERCENT=0.02 \
     MEDIA_ATLAS_TRANSCODE_MIN_FREE_BYTES=1073741824 \
-    MEDIA_ATLAS_AUTH_MODE=disabled \
+    MEDIA_ATLAS_AUTH_MODE=single_admin \
     MEDIA_ATLAS_LOG_RETENTION_DAYS=30 \
     MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS=0 \
     LIBVA_DRIVER_NAME=iHD
@@ -51,9 +60,10 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ /app/backend/
+COPY scripts/ /app/scripts/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
-RUN mkdir -p /app/data /app/reports /app/logs /app/transcode-staging /media /mnt
+RUN mkdir -p /app/data /app/reports /app/logs /app/transcode-staging /app/transcode-backups /media /mnt
 
 EXPOSE 8000
 

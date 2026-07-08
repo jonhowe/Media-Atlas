@@ -41,6 +41,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0004_publish_progress", db.migration_status()["applied"])
             self.assertIn("0005_transcode_run_cleanup_archive", db.migration_status()["applied"])
             self.assertIn("0006_transcode_savings", db.migration_status()["applied"])
+            self.assertIn("0007_publish_validation_and_indexes", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             with tempfile.TemporaryDirectory() as config_temp_dir:
                 config_env = {
@@ -185,6 +186,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertEqual(published["publish_status"], "published")
             self.assertEqual(published["publish_step"], "completed")
             self.assertEqual(published["publish_progress_percent"], 100)
+            self.assertIsNone(published["validated_at"])
             self.assertEqual(published["source_size_bytes"], len(b"original media bytes"))
             self.assertEqual(published["output_size_bytes"], len(b"transcoded media bytes"))
             self.assertEqual(
@@ -192,6 +194,10 @@ class ProductionSmokeTest(unittest.TestCase):
                 len(b"original media bytes") + len(b"transcoded media bytes"),
             )
             self.assertEqual(list(media_dir.glob("*media-atlas-backup*")), [])
+            with self.assertRaises(ValueError):
+                transcode_manager.cleanup_item_artifacts(run_id, item_id, "DELETE ARTIFACTS")
+            validated = transcode_manager.validate_item(run_id, item_id, "VALIDATED")
+            self.assertTrue(validated["validated_at"])
             cleaned = transcode_manager.cleanup_run_artifacts(run_id, "DELETE ARTIFACTS")
             self.assertEqual(source_path.read_bytes(), b"transcoded media bytes")
             self.assertFalse(target_path.exists())
@@ -230,9 +236,9 @@ class ProductionSmokeTest(unittest.TestCase):
                 INSERT INTO transcode_run_items (
                     run_id, status, source_path, target_path, command_json, command_display,
                     verification_status, verification_message, warnings_json, created_at, finished_at,
-                    published_at, published_backup_path
+                    published_at, published_backup_path, validated_at
                 )
-                VALUES (?, 'succeeded', ?, ?, ?, ?, 'verified', 'ok', '[]', ?, ?, ?, ?)
+                VALUES (?, 'succeeded', ?, ?, ?, ?, 'verified', 'ok', '[]', ?, ?, ?, ?, ?)
                 """,
                 (
                     partial_run_id,
@@ -244,6 +250,7 @@ class ProductionSmokeTest(unittest.TestCase):
                     now,
                     now,
                     str(partial_backup),
+                    now,
                 ),
             )
             unpublished_item_id = db.execute(
@@ -298,10 +305,19 @@ class ProductionSmokeTest(unittest.TestCase):
                     set(runtime_config["operations"]),
                     {"acknowledge_auth_disabled_lan", "fail_unsafe_bind", "allowed_origins"},
                 )
+                self.assertEqual(admin_status.json()["version"]["version"], "0.1.0")
+
+                diagnostics = client.get("/api/admin/diagnostics")
+                self.assertEqual(diagnostics.status_code, 200)
+                diagnostics_body = diagnostics.json()
+                self.assertIn("runtime_config", diagnostics_body)
+                self.assertIn("version", diagnostics_body)
+                self.assertNotIn("MEDIA_ATLAS_PLEX_TOKEN", diagnostics.text)
 
                 stats = client.get("/api/transcode-runs/stats")
                 self.assertEqual(stats.status_code, 200)
                 self.assertEqual(stats.json()["items_with_size_comparison"], 1)
+                self.assertEqual(stats.json()["items_validated"], 2)
 
                 item_cleanup_response = client.post(
                     f"/api/transcode-runs/{partial_run_id}/items/{partial_item_id}/cleanup",

@@ -678,6 +678,34 @@ MIGRATIONS: list[tuple[str, str]] = [
         WHERE source_size_bytes IS NULL;
         """,
     ),
+    (
+        "0007_publish_validation_and_indexes",
+        """
+        ALTER TABLE transcode_run_items ADD COLUMN validated_at TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN validation_message TEXT;
+        UPDATE transcode_run_items
+        SET validated_at = published_at,
+            validation_message = 'Marked validated during upgrade because cleanup previously allowed published items.'
+        WHERE published_at IS NOT NULL
+          AND validated_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_files_updated_at ON files(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_files_directory ON files(directory);
+        CREATE INDEX IF NOT EXISTS idx_files_library_filters
+          ON files(is_missing, recommendation_category, primary_video_codec, container, resolution_bucket);
+        CREATE INDEX IF NOT EXISTS idx_scan_jobs_created_at ON scan_jobs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_transcode_runs_created_at ON transcode_runs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_transcode_runs_plan_id ON transcode_runs(plan_id);
+        CREATE INDEX IF NOT EXISTS idx_transcode_run_items_publish
+          ON transcode_run_items(published_at, cleanup_status);
+        CREATE INDEX IF NOT EXISTS idx_transcode_run_items_validated ON transcode_run_items(validated_at);
+        CREATE INDEX IF NOT EXISTS idx_plex_sync_jobs_created_at ON plex_sync_jobs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_plex_file_matches_file_status
+          ON plex_file_matches(file_id, match_status);
+        CREATE INDEX IF NOT EXISTS idx_plex_file_matches_item_status
+          ON plex_file_matches(plex_item_id, match_status);
+        """,
+    ),
 ]
 
 
