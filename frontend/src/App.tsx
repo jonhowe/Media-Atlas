@@ -414,7 +414,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
       const [nextHealth, nextSummary, nextRuns, nextScans, nextSavings] = await Promise.all([
         api<Health>("/api/health"),
         api<Summary>("/api/reports/summary"),
-        api<TranscodeRun[]>("/api/transcode-runs?limit=5"),
+        api<TranscodeRun[]>("/api/transcode-runs?limit=5&include_archived=true"),
         api<ScanJob[]>("/api/scans?limit=5"),
         api<TranscodeSavingsStats>("/api/transcode-runs/stats")
       ]);
@@ -454,7 +454,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
           <TranscodeSavingsPanel stats={savings} />
         </Panel>
         <Panel title="Recent Transcode Runs">
-          <CompactList rows={runs} primary="name" secondary="status" />
+          <RecentTranscodeRuns runs={runs} />
         </Panel>
         <Panel title="Recent Scans">
           <RecentScans scans={scans} />
@@ -722,6 +722,40 @@ function scanTiming(scan: ScanJob) {
     label: scan.finished_at ? "Duration" : "Elapsed",
     value: formatElapsed(elapsedMs)
   };
+}
+
+function RecentTranscodeRuns({ runs }: { runs: TranscodeRun[] }) {
+  if (!runs.length) {
+    return <p className="muted">No transcode runs yet.</p>;
+  }
+  return (
+    <div className="recentScans">
+      {runs.map((run) => (
+        <div className="recentScan" key={run.id}>
+          <div className="recentScanHeader">
+            <strong>{run.name || `Run #${run.id}`}</strong>
+            <div className="rowActions">
+              <StatusBadge status={run.status} />
+              {run.archived_at && <Badge>Archived</Badge>}
+            </div>
+          </div>
+          <div className="progressHeader">
+            <strong>{Math.round(run.progress_percent || 0)}%</strong>
+            <span>{run.completed_items} / {run.total_items} items</span>
+          </div>
+          <Progress value={run.progress_percent || 0} />
+          <div className="scanStats">
+            <span><strong>{run.failed_items}</strong> failed</span>
+            <span><strong>{run.canceled_items}</strong> canceled</span>
+            <span><strong>{formatRunDuration(run)}</strong> duration</span>
+            <span><strong>{formatDateTime(run.created_at)}</strong> created</span>
+          </div>
+          {run.archived_at && <div className="muted">Archived {formatDateTime(run.archived_at)}</div>}
+          {run.message && <div className="muted">{run.message}</div>}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function RecentScans({ scans }: { scans: ScanJob[] }) {
@@ -1578,6 +1612,7 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
   }
 
   const readiness = status.readiness;
+  const runtimeConfig = status.runtime_config;
   return (
     <section className="stack">
       <div className="metrics">
@@ -1591,6 +1626,30 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
           <ul>{readiness.config_warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </Panel>
       )}
+      <Panel title="Runtime Configuration">
+        <div className="statusGrid">
+          <div className="storageRow">
+            <strong>Bind address</strong>
+            <span className="path">{runtimeConfig.host}:{runtimeConfig.port}</span>
+            <span>LAN mode</span>
+            <Badge tone={runtimeConfig.allow_lan ? "info" : "muted"}>{runtimeConfig.allow_lan ? "Enabled" : "Disabled"}</Badge>
+          </div>
+          <div className="storageRow">
+            <strong>Auth mode</strong>
+            <span>{runtimeConfig.auth.mode}</span>
+            <span>No-auth LAN acknowledged</span>
+            <Badge tone={runtimeConfig.operations.acknowledge_auth_disabled_lan ? "good" : "warn"}>
+              {runtimeConfig.operations.acknowledge_auth_disabled_lan ? "True" : "False"}
+            </Badge>
+          </div>
+          <div className="storageRow">
+            <strong>Unsafe bind failure</strong>
+            <span>{runtimeConfig.operations.fail_unsafe_bind ? "Enabled" : "Disabled"}</span>
+            <span>Allowed origins</span>
+            <span className="path">{runtimeConfig.operations.allowed_origins.join(", ") || "None"}</span>
+          </div>
+        </div>
+      </Panel>
       <div className="grid two">
         <Panel title="Storage">
           <div className="statusGrid">
@@ -1648,7 +1707,7 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
             <a className="button" href="/api/admin/database-backup">Download database backup</a>
             <button onClick={runRetention}>Run retention cleanup</button>
           </div>
-          <pre className="json">{JSON.stringify({ auth: status.auth, retention: status.retention, migrations: readiness.migrations }, null, 2)}</pre>
+          <pre className="json">{JSON.stringify({ auth: status.auth, runtime_config: runtimeConfig, retention: status.retention, migrations: readiness.migrations }, null, 2)}</pre>
         </Panel>
       </div>
     </section>
