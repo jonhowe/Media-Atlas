@@ -261,6 +261,22 @@ Readiness returns HTTP `503` when required checks fail. The Docker healthcheck u
 - `single_admin`: built-in admin login with signed HttpOnly session cookies. Recommended for LAN/VPN Compose installs.
 - `reverse_proxy_trusted`: Media Atlas trusts `MEDIA_ATLAS_TRUSTED_USER_HEADER`. Use only behind a reverse proxy that authenticates users and strips client-supplied identity headers.
 
+### Compose Environment Changes
+
+Docker Compose reads `.env` when it creates or updates the container environment. If you change settings such as `MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN`, run:
+
+```bash
+docker compose up -d
+```
+
+Refreshing the browser does not reload backend configuration, and `docker compose restart` may keep the old container environment. To confirm what Compose will pass into the container, run:
+
+```bash
+docker compose config | grep MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN
+```
+
+The Admin Status page also shows the parsed runtime configuration loaded by the running backend.
+
 ### Backups
 
 Create a safe SQLite backup from the host:

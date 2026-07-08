@@ -28,7 +28,7 @@ class ProductionSmokeTest(unittest.TestCase):
             from fastapi.testclient import TestClient
 
             from app import db
-            from app.config import CONFIG
+            from app.config import CONFIG, load_config
             from app.main import app, scan_manager, transcode_manager
             from app.services import scanner as scanner_module
             from app.services.transcodes import build_command, transcode_savings_stats
@@ -42,6 +42,22 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0005_transcode_run_cleanup_archive", db.migration_status()["applied"])
             self.assertIn("0006_transcode_savings", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
+            with tempfile.TemporaryDirectory() as config_temp_dir:
+                config_env = {
+                    "MEDIA_ATLAS_HOST": "0.0.0.0",
+                    "MEDIA_ATLAS_DATA_DIR": f"{config_temp_dir}/data",
+                    "MEDIA_ATLAS_REPORTS_DIR": f"{config_temp_dir}/reports",
+                    "MEDIA_ATLAS_LOGS_DIR": f"{config_temp_dir}/logs",
+                    "MEDIA_ATLAS_TRANSCODE_STAGING_DIR": f"{config_temp_dir}/staging",
+                    "MEDIA_ATLAS_AUTH_MODE": "disabled",
+                    "MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN": "true",
+                }
+                with patch.dict(os.environ, config_env, clear=False):
+                    acknowledged_config = load_config()
+                self.assertTrue(acknowledged_config.operations.acknowledge_auth_disabled_lan)
+                self.assertEqual(acknowledged_config.host, "0.0.0.0")
+                self.assertEqual(acknowledged_config.auth.mode, "disabled")
+                self.assertEqual(acknowledged_config.config_warnings, [])
             profiles = db.query_all("SELECT name, command_template FROM transcode_profiles")
             templates = {profile["command_template"] for profile in profiles}
             self.assertTrue(
@@ -271,6 +287,17 @@ class ProductionSmokeTest(unittest.TestCase):
                 auth = client.get("/api/auth/me")
                 self.assertEqual(auth.status_code, 200)
                 self.assertTrue(auth.json()["authenticated"])
+
+                admin_status = client.get("/api/admin/status")
+                self.assertEqual(admin_status.status_code, 200)
+                runtime_config = admin_status.json()["runtime_config"]
+                self.assertEqual(runtime_config["host"], "127.0.0.1")
+                self.assertEqual(runtime_config["port"], 8000)
+                self.assertEqual(runtime_config["auth"], {"mode": "disabled"})
+                self.assertEqual(
+                    set(runtime_config["operations"]),
+                    {"acknowledge_auth_disabled_lan", "fail_unsafe_bind", "allowed_origins"},
+                )
 
                 stats = client.get("/api/transcode-runs/stats")
                 self.assertEqual(stats.status_code, 200)

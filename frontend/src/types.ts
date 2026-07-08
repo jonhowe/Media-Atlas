@@ -40,6 +40,19 @@ export type AuthStatus = {
 export type AdminStatus = {
   readiness: ReadinessStatus;
   auth: Record<string, unknown>;
+  runtime_config: {
+    host: string;
+    port: number;
+    allow_lan: boolean;
+    auth: {
+      mode: "disabled" | "single_admin" | "reverse_proxy_trusted";
+    };
+    operations: {
+      acknowledge_auth_disabled_lan: boolean;
+      fail_unsafe_bind: boolean;
+      allowed_origins: string[];
+    };
+  };
   storage: Record<string, { path: string; ok: boolean; free_bytes?: number; total_bytes?: number; used_bytes?: number; error?: string }>;
   recent_failures: {
     scans: ScanJob[];

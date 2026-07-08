@@ -46,6 +46,19 @@ def admin_status() -> dict[str, Any]:
     return {
         "readiness": readiness,
         "auth": redacted_config(),
+        "runtime_config": {
+            "host": CONFIG.host,
+            "port": CONFIG.port,
+            "allow_lan": CONFIG.allow_lan,
+            "auth": {
+                "mode": CONFIG.auth.mode,
+            },
+            "operations": {
+                "acknowledge_auth_disabled_lan": CONFIG.operations.acknowledge_auth_disabled_lan,
+                "fail_unsafe_bind": CONFIG.operations.fail_unsafe_bind,
+                "allowed_origins": CONFIG.operations.allowed_origins,
+            },
+        },
         "storage": {
             "data_dir": _disk_payload(CONFIG.data_dir),
             "reports_dir": _disk_payload(CONFIG.reports_dir),
