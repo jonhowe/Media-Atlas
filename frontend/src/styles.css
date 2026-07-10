@@ -992,15 +992,10 @@ label {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-<<<<<<< HEAD
-=======
-    white-space: nowrap;
->>>>>>> origin/main
   }
 
   th,
   td {
-<<<<<<< HEAD
     overflow-wrap: anywhere;
     padding: 12px 10px;
   }
@@ -1098,11 +1093,7 @@ label {
     min-width: 0;
   }
 
-=======
-    padding: 12px 10px;
-  }
 
->>>>>>> origin/main
   .drawer {
     border-top-left-radius: 18px;
     height: 96dvh;
