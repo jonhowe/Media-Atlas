@@ -1084,7 +1084,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
             <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
           </div>
         </div>
-        <table>
+        <table className="plannerPlansTable mobileStackTable">
           <thead>
             <tr>
               <th>Plan</th>
@@ -1097,15 +1097,19 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
           <tbody>
             {plans.map((plan) => (
               <tr key={plan.id}>
-                <td>
+                <td className="mobileStackPrimary">
                   <strong>{plan.name}</strong>
                   <div className="muted">
                     {plan.profile_name || "Unknown profile"} · {plan.status}
                     {plan.archived_at ? ` · archived ${formatDateTime(plan.archived_at)}` : ""}
                   </div>
                 </td>
-                <td>{formatDateTime(plan.created_at)}</td>
                 <td>
+                  <span className="mobileCellLabel">Created</span>
+                  {formatDateTime(plan.created_at)}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Files involved</span>
                   <div className="planFiles">
                     <strong>{plan.item_count || 0} files</strong>
                     {(plan.sample_items || []).map((item) => (
@@ -1115,6 +1119,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
                   </div>
                 </td>
                 <td>
+                  <span className="mobileCellLabel">Run history</span>
                   <PlanRunSummary plan={plan} />
                 </td>
                 <td className="rowActions">
@@ -1156,10 +1161,10 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
         {selectedProfile(profiles, profileId)?.description && (
           <p className="muted">{selectedProfile(profiles, profileId)?.description}</p>
         )}
-        <table>
+        <table className="plannerCandidateTable mobileStackTable">
           <thead>
             <tr>
-              <th></th>
+              <th aria-label="Select"></th>
               <th>File</th>
               <th>Size</th>
               <th>Video</th>
@@ -1169,11 +1174,30 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
           <tbody>
             {files.map((file) => (
               <tr key={file.id}>
-                <td><input type="checkbox" checked={selected.has(file.id)} onChange={() => toggleFile(file.id)} /></td>
-                <td>{file.filename}</td>
-                <td>{formatBytes(file.size_bytes)}</td>
-                <td>{file.resolution_bucket} {file.primary_video_codec}</td>
-                <td>{file.recommendation_summary}</td>
+                <td className="candidateSelectCell">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${file.filename}`}
+                    checked={selected.has(file.id)}
+                    onChange={() => toggleFile(file.id)}
+                  />
+                </td>
+                <td className="candidateFileCell mobileStackPrimary">
+                  <strong>{file.filename}</strong>
+                  <div className="path">{file.path}</div>
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Size</span>
+                  {formatBytes(file.size_bytes)}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Video</span>
+                  {file.resolution_bucket} {file.primary_video_codec}
+                </td>
+                <td className="candidateReasonCell">
+                  <span className="mobileCellLabel">Reason</span>
+                  {file.recommendation_summary}
+                </td>
               </tr>
             ))}
           </tbody>
