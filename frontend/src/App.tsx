@@ -604,7 +604,7 @@ function Directories({ onToast }: { onToast: (message: string) => void }) {
         )}
       </Panel>
       <Panel title="Configured Roots">
-        <table>
+        <table className="directoriesTable mobileStackTable">
           <thead>
             <tr>
               <th>Name</th>
@@ -617,10 +617,19 @@ function Directories({ onToast }: { onToast: (message: string) => void }) {
           <tbody>
             {roots.map((root) => (
               <tr key={root.id}>
-                <td>{root.name}</td>
-                <td className="path">{root.path}</td>
-                <td><Badge tone={root.enabled ? "good" : "muted"}>{root.enabled ? "Enabled" : "Disabled"}</Badge></td>
-                <td>{root.last_scanned_at || "Never"}</td>
+                <td className="mobileStackPrimary"><strong>{root.name}</strong></td>
+                <td className="path">
+                  <span className="mobileCellLabel">Path</span>
+                  {root.path}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Status</span>
+                  <Badge tone={root.enabled ? "good" : "muted"}>{root.enabled ? "Enabled" : "Disabled"}</Badge>
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Last scanned</span>
+                  {root.last_scanned_at || "Never"}
+                </td>
                 <td className="rowActions">
                   <button onClick={() => toggle(root)}>{root.enabled ? "Disable" : "Enable"}</button>
                   <button className="danger" onClick={() => remove(root)}>Remove</button>
@@ -682,7 +691,7 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
         </button>
       </div>
       <Panel title="Scan Jobs">
-        <table>
+        <table className="scansTable mobileStackTable">
           <thead>
             <tr>
               <th>ID</th>
@@ -701,12 +710,14 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
               const timing = scanTiming(scan);
               return (
                 <tr key={scan.id}>
-                  <td>{scan.id}</td>
+                  <td className="mobileStackPrimary"><strong>Scan #{scan.id}</strong></td>
                   <td>
+                    <span className="mobileCellLabel">Status</span>
                     <StatusBadge status={scan.status} />
                     {scan.files_failed > 0 && <div className="muted">{scan.files_failed} failed</div>}
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Progress</span>
                     <div className="scanProgressCell">
                       <div className="progressHeader">
                         <strong>{progress.percent}%</strong>
@@ -719,6 +730,7 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Files</span>
                     <div className="scanStats">
                       <span><strong>{scan.total_files_discovered}</strong> discovered</span>
                       <span><strong>{progress.completed}</strong> processed</span>
@@ -727,14 +739,21 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Timing</span>
                     <div className="scanTiming">
                       <span>Created {formatDateTime(scan.created_at)}</span>
                       <span>Started {formatDateTime(scan.started_at)}</span>
                       <span>{timing.label} {timing.value}</span>
                     </div>
                   </td>
-                  <td>{scan.message}</td>
-                  <td className="path">{scan.current_path}</td>
+                  <td>
+                    <span className="mobileCellLabel">Message</span>
+                    {scan.message}
+                  </td>
+                  <td className="path">
+                    <span className="mobileCellLabel">Current file</span>
+                    {scan.current_path}
+                  </td>
                   <td className="rowActions">
                     {["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}
                     {["failed", "canceled", "interrupted"].includes(scan.status) && <button onClick={() => retry(scan.id)}>Retry</button>}
@@ -1499,7 +1518,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
             Show archived
           </label>
         </div>
-        <table>
+        <table className="transcodeRunsTable mobileStackTable">
           <thead>
             <tr>
               <th>Name</th>
@@ -1515,16 +1534,29 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
           <tbody>
             {runs.map((run) => (
               <tr key={run.id}>
-                <td>
+                <td className="mobileStackPrimary">
                   <strong>{run.name}</strong>
                   <div className="muted">Created {formatDateTime(run.created_at)}</div>
                   {run.archived_at && <div className="muted">Archived {formatDateTime(run.archived_at)}</div>}
                 </td>
-                <td><StatusBadge status={run.status} /></td>
-                <td>{formatDateTime(run.started_at)}</td>
-                <td>{formatStopDateTime(run.finished_at, run.status)}</td>
-                <td>{formatRunDuration(run)}</td>
                 <td>
+                  <span className="mobileCellLabel">Status</span>
+                  <StatusBadge status={run.status} />
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Started</span>
+                  {formatDateTime(run.started_at)}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Stopped</span>
+                  {formatStopDateTime(run.finished_at, run.status)}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Duration</span>
+                  {formatRunDuration(run)}
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Progress</span>
                   <div className="scanProgressCell">
                     <div className="progressHeader">
                       <strong>{Math.round(run.progress_percent || 0)}%</strong>
@@ -1535,6 +1567,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                   </div>
                 </td>
                 <td>
+                  <span className="mobileCellLabel">Items</span>
                   <div className="scanStats">
                     <span><strong>{run.completed_items}</strong> complete</span>
                     <span><strong>{run.failed_items}</strong> failed</span>
@@ -1581,7 +1614,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
             <Metric label="Saved" value={formatSignedBytes(selectedSavings?.saved || 0)} />
             <Metric label="Measured Items" value={`${selectedSavings?.measuredItems || 0}`} />
           </div>
-          <table>
+          <table className="transcodeRunItemsTable mobileStackTable">
             <thead>
               <tr>
                 <th>Item</th>
@@ -1597,9 +1630,13 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
             <tbody>
               {selected.items?.map((item) => (
                 <tr key={item.id}>
-                  <td>{item.id}</td>
-                  <td><StatusBadge status={item.status} /></td>
+                  <td className="mobileStackPrimary"><strong>Item #{item.id}</strong></td>
                   <td>
+                    <span className="mobileCellLabel">Status</span>
+                    <StatusBadge status={item.status} />
+                  </td>
+                  <td>
+                    <span className="mobileCellLabel">Progress</span>
                     <div className="scanProgressCell">
                       <div className="progressHeader">
                         <strong>{Math.round(item.progress_percent || 0)}%</strong>
@@ -1610,6 +1647,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Timing</span>
                     <div className="scanTiming">
                       <span>Started {formatDateTime(item.started_at)}</span>
                       <span>Stopped {formatStopDateTime(item.finished_at, item.status)}</span>
@@ -1617,6 +1655,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td className="path">
+                    <span className="mobileCellLabel">Target</span>
                     <strong>Staged</strong>
                     <span>{item.target_path}</span>
                     <strong>Original</strong>
@@ -1630,11 +1669,13 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Verification</span>
                     <div className="statusGrid">
                       <span>{item.verification_status} {item.verification_message}</span>
                     </div>
                   </td>
                   <td>
+                    <span className="mobileCellLabel">Publish</span>
                     <div className="scanProgressCell">
                       {item.publish_status ? (
                         <>
@@ -2086,7 +2127,7 @@ function Settings({ onToast }: { onToast: (message: string) => void }) {
 function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number) => void }) {
   return (
     <Panel title="Media Files">
-      <table>
+      <table className="mediaFilesTable mobileStackTable">
         <thead>
           <tr>
             <th>File</th>
@@ -2102,13 +2143,20 @@ function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number
         <tbody>
           {files.map((file) => (
             <tr key={file.id} onClick={() => onOpen(file.id)}>
-              <td>
+              <td className="mobileStackPrimary">
                 <strong>{file.filename}</strong>
                 <div className="path">{file.path}</div>
               </td>
-              <td>{file.root_name}</td>
-              <td>{formatBytes(file.size_bytes)}</td>
               <td>
+                <span className="mobileCellLabel">Root</span>
+                {file.root_name}
+              </td>
+              <td>
+                <span className="mobileCellLabel">Size</span>
+                {formatBytes(file.size_bytes)}
+              </td>
+              <td>
+                <span className="mobileCellLabel">Plex</span>
                 {file.plex?.match_status === "matched" ? (
                   <>
                     <strong>{plexDisplayTitle(file)}</strong>
@@ -2120,10 +2168,20 @@ function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number
                   <Badge tone="muted">Unmatched</Badge>
                 )}
               </td>
-              <td>{file.resolution_bucket || "Unknown"} {file.primary_video_codec || ""} {file.is_hdr && <Badge tone="warn">HDR</Badge>}</td>
-              <td>{file.primary_audio_codec || "Unknown"} {file.audio_stream_count > 1 && `+${file.audio_stream_count - 1}`}</td>
-              <td>{file.bitrate_mbps ? `${file.bitrate_mbps} Mbps` : "Unknown"}</td>
               <td>
+                <span className="mobileCellLabel">Video</span>
+                {file.resolution_bucket || "Unknown"} {file.primary_video_codec || ""} {file.is_hdr && <Badge tone="warn">HDR</Badge>}
+              </td>
+              <td>
+                <span className="mobileCellLabel">Audio</span>
+                {file.primary_audio_codec || "Unknown"} {file.audio_stream_count > 1 && `+${file.audio_stream_count - 1}`}
+              </td>
+              <td>
+                <span className="mobileCellLabel">Bitrate</span>
+                {file.bitrate_mbps ? `${file.bitrate_mbps} Mbps` : "Unknown"}
+              </td>
+              <td>
+                <span className="mobileCellLabel">Recommendation</span>
                 <Badge tone={toneFor(file.recommendation_category)}>{file.recommendation_category || "Unknown"}</Badge>
                 <div className="muted">{file.recommendation_summary}</div>
               </td>
