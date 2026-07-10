@@ -4,6 +4,10 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Added responsive mobile navigation and improved small-screen table layouts.
+- Clarified README Docker configuration parameters.
+- Hardened GitHub Actions caching with an explicit BuildKit scope, non-fatal cache exports, release cache reuse, and automatic closed-PR cache cleanup.
+- Added repository publication instructions for scoped pull request and release automation.
 - Added Admin Status version/build metadata and a redacted diagnostics JSON export.
 - Added a Compose/env doctor script plus deployment and operations runbooks.
 - Changed the Docker image default auth mode to `single_admin` for safer LAN/VPN installs.

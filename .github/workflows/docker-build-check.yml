@@ -64,8 +64,8 @@ jobs:
             MEDIA_ATLAS_GIT_SHA=${{ github.sha }}
             MEDIA_ATLAS_BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
             MEDIA_ATLAS_IMAGE_TAG=ci-test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=media-atlas
+          cache-to: type=gha,scope=media-atlas,mode=max,ignore-error=true
 
       - name: Smoke test image internals
         run: |
