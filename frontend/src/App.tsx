@@ -83,6 +83,7 @@ export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [showFirstRunSetup, setShowFirstRunSetup] = useState(false);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     refreshAuth();
@@ -144,6 +145,13 @@ export default function App() {
     setTheme((current) => current === "dark" ? "light" : "dark");
   }
 
+  function changePage(nextPage: Page) {
+    setPage(nextPage);
+    setMobileNavOpen(false);
+  }
+
+  const currentPageLabel = showFirstRunSetup ? "First-run setup" : nav.find(([key]) => key === page)?.[1];
+
   if (!auth) {
     return <Splash message="Checking access" />;
   }
@@ -153,8 +161,14 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <aside className="sidebar">
+    <div className={`app ${mobileNavOpen ? "navOpen" : ""}`}>
+      <button
+        className="mobileNavBackdrop"
+        type="button"
+        aria-label="Close navigation"
+        onClick={() => setMobileNavOpen(false)}
+      />
+      <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand">
           <img className="brandLogo" src="/media-atlas-logo.svg" alt="" />
           <div>
@@ -167,7 +181,7 @@ export default function App() {
             <button
               key={key}
               className={page === key ? "active" : ""}
-              onClick={() => setPage(key)}
+              onClick={() => changePage(key)}
             >
               {label}
             </button>
@@ -176,8 +190,25 @@ export default function App() {
       </aside>
       <main>
         <header className="topbar">
-          <div>
-            <h1>{showFirstRunSetup ? "First-run setup" : nav.find(([key]) => key === page)?.[1]}</h1>
+          <div className="mobileTopbar">
+            <button
+              className="mobileMenuButton"
+              type="button"
+              aria-label="Open navigation"
+              aria-expanded={mobileNavOpen}
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
+            <div className="mobileBrand">
+              <img className="brandLogo" src="/media-atlas-logo.svg" alt="" />
+              <strong>Media Atlas</strong>
+            </div>
+          </div>
+          <div className="pageHeading">
+            <h1>{currentPageLabel}</h1>
             <p>{showFirstRunSetup ? "Configure optional Plex enrichment before your first sync." : "Scan, understand, plan, and safely run staged media conversions."}</p>
           </div>
           <div className="topbarActions">
@@ -210,6 +241,21 @@ export default function App() {
             {page === "status" && <AdminStatusPage onToast={setToast} />}
             {page === "settings" && <Settings onToast={setToast} />}
           </>
+        )}
+        {!showFirstRunSetup && (
+          <nav className="mobileBottomNav" aria-label="Quick navigation">
+            {nav.slice(0, 5).map(([key, label]) => (
+              <button
+                key={key}
+                className={page === key ? "active" : ""}
+                type="button"
+                onClick={() => changePage(key)}
+              >
+                {label}
+              </button>
+            ))}
+            <button type="button" onClick={() => setMobileNavOpen(true)}>More</button>
+          </nav>
         )}
       </main>
     </div>
