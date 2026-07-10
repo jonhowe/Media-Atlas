@@ -617,6 +617,11 @@ label {
   min-width: 260px;
 }
 
+.mediaFilesTable .mobileStackPrimary,
+.transcodeRunsTable .mobileStackPrimary {
+  min-width: 220px;
+}
+
 .detailGrid {
   display: grid;
   gap: 12px;
@@ -994,9 +999,12 @@ label {
     -webkit-overflow-scrolling: touch;
   }
 
+  table:not(.mobileStackTable) {
+    white-space: nowrap;
+  }
+
   th,
   td {
-    overflow-wrap: anywhere;
     padding: 12px 10px;
   }
 
@@ -1031,7 +1039,13 @@ label {
 
   .mobileStackTable td {
     border-bottom: 0;
+    overflow-wrap: anywhere;
     padding: 0;
+  }
+
+  .mobileStackTable .rowActions button,
+  .mobileStackTable .rowActions .button {
+    white-space: nowrap;
   }
 
   .mobileStackPrimary strong {
@@ -1057,6 +1071,41 @@ label {
   .plannerPlansTable .planFiles,
   .plannerPlansTable .planRunSummary {
     max-width: none;
+    min-width: 0;
+  }
+
+  .directoriesTable tr,
+  .scansTable tr,
+  .mediaFilesTable tr,
+  .transcodeRunsTable tr,
+  .transcodeRunItemsTable tr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .directoriesTable .path,
+  .scansTable .path,
+  .mediaFilesTable .path,
+  .transcodeRunItemsTable .path {
+    min-width: 0;
+  }
+
+  .scansTable .scanProgressCell,
+  .scansTable .scanStats,
+  .scansTable .scanTiming,
+  .transcodeRunsTable .scanProgressCell,
+  .transcodeRunsTable .scanStats,
+  .transcodeRunItemsTable .scanProgressCell,
+  .transcodeRunItemsTable .scanTiming,
+  .transcodeRunItemsTable .statusGrid {
+    min-width: 0;
+  }
+
+  .mediaFilesTable tr {
+    cursor: pointer;
+  }
+
+  .mediaFilesTable .mobileStackPrimary,
+  .transcodeRunsTable .mobileStackPrimary {
     min-width: 0;
   }
 
