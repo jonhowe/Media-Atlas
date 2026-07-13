@@ -4,6 +4,7 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Fixed Release Automator backend validation to use an isolated uv environment with the project requirements installed.
 - Integrated Release Automator v0.3.0 with frozen planning, protected execution, split read/write credentials, and resumable GitHub publication workflows.
 - Added responsive mobile navigation and improved small-screen table layouts.
 - Clarified README Docker configuration parameters.
