@@ -23,7 +23,7 @@ max_diff_bytes = 200000
 
 [[validation]]
 name = "backend tests"
-argv = ["python", "-m", "unittest", "discover", "-s", "tests"]
+argv = ["uv", "run", "--isolated", "--with-requirements", "requirements.txt", "python", "-m", "unittest", "discover", "-s", "tests"]
 cwd = "backend"
 
 [[validation]]

@@ -373,6 +373,7 @@ For a concise technical map of the app, see [Architecture](docs/ARCHITECTURE.md)
 
 GitHub Actions publishes images to GHCR.
 
+- Repository publication uses the manually approved Release Automator plan and execute workflows before a GitHub Release is created.
 - GHCR publishing runs only when a GitHub Release is published.
 - Pushing to `main` runs validation workflows but does not publish or retag the container image.
 - `ghcr.io/jonhowe/media-atlas:latest` tracks the latest published GitHub Release.
