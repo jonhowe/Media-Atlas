@@ -1,0 +1,32 @@
+[git]
+branch_prefix = "agent/"
+merge_method = "squash"
+delete_remote_branch = true
+delete_local_branch = true
+
+[checks]
+required = ["build-and-test"]
+accepted_conclusions = ["success"]
+poll_seconds = 10
+discovery_timeout_seconds = 300
+completion_timeout_seconds = 3600
+allow_no_checks = false
+
+[release]
+enabled_by_default = true
+tag_prefix = "v"
+side_effect_notice = "Publishing a GitHub Release triggers .github/workflows/publish-ghcr.yml and publishes the release tag, latest, and sha-<commit> GHCR image tags."
+
+[openai]
+model = "gpt-5.4-mini-2026-03-17"
+max_diff_bytes = 200000
+
+[[validation]]
+name = "backend tests"
+argv = ["python", "-m", "unittest", "discover", "-s", "tests"]
+cwd = "backend"
+
+[[validation]]
+name = "frontend build"
+argv = ["npm", "run", "build"]
+cwd = "frontend"

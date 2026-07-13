@@ -1,35 +1,85 @@
 # Repository Instructions
 
-## GitHub publication approval workflow
+## GitHub publication with Release Automator
 
-After completing any task that changes files in this repository, offer to publish the completed work to GitHub. Do not make this offer after a read-only task, and do not repeat it for a change set the user has already declined to publish.
+After completing a task that changes repository files, offer to publish the completed work through
+the repository's Release Automator workflows. Do not offer after read-only work, and do not repeat
+the offer for a change set the user has already declined to publish.
 
-Before creating or switching branches, staging files, committing, pushing, creating or merging a pull request, or creating a release, inspect the repository and present one complete publication proposal to the user. The proposal must include:
+Release Automator is installed through these manual GitHub Actions workflows:
 
-- the files and changes that will be included, plus any working-tree changes that will be excluded;
-- validation already completed, its results, and any applicable items from `docs/RELEASE_CHECKLIST.md` that remain unverified;
-- the exact new branch name, using `agent/<concise-kebab-case-task-slug>`, and the exact commit message;
-- a ready-for-review pull request targeting `main`, including its exact title and complete body;
-- the plan to wait for required checks, squash-merge the pull request, and delete the remote branch;
-- the latest GitHub release and latest stable release, the exact proposed stable release tag with a short rationale, and the exact release title and complete release notes;
-- confirmation that the release will target the pull request's squash-merge commit on `main`, will not be marked as a prerelease, and will be marked as the latest release; and
-- the intended execution split: local `git` for branch/commit synchronization, the GitHub app/plugin for supported repository and pull request operations, and approved unsandboxed `gh` commands only for capabilities the plugin does not provide; and
-- the repository-specific consequence that publishing a release triggers `.github/workflows/publish-ghcr.yml`, which publishes matching, `latest`, and commit-pinned GHCR image tags.
+- `release-automator-plan.yml` creates a frozen, reviewable publication plan and artifact.
+- `release-automator-execute.yml` executes only an explicitly approved 64-character plan ID.
+- `release-automator-resume.yml` resumes a failed approved run without repeating completed work.
 
-End the proposal with one direct approval question. One explicit approval authorizes the exact branch, commit, push, pull request, wait-for-checks, squash merge, branch deletion, and release sequence described in the proposal. If the user changes any part of the proposal, present the complete revised proposal before asking again. A general request to push, publish, or release does not replace this exact-proposal approval requirement.
+The workflows pin `jonhowe/Release-Automator` to the immutable commit for Marketplace release
+`v0.3.0`. Repository policy is defined in `release-automator.toml`.
 
-After approval, execute this sequence without additional approval checkpoints:
+### Required repository setup
 
-1. Verify GitHub app/plugin access first. Verify `gh` authentication in an approved unsandboxed command before declaring it unavailable, because the normal sandbox may be unable to read a valid macOS Keychain credential. Confirm that the proposed branch and release tag are still available.
-2. Use local `git` to create the proposed branch from the current `main` commit, preserve alignment with the shared working tree, stage only the approved files, and create the approved commit.
-3. Run any relevant checks that have not already been run. Use local `git` to push the branch to `origin` with upstream tracking.
-4. Prefer the GitHub app/plugin to open and inspect the approved ready-for-review pull request against `main`. Use `gh` only if the plugin lacks the required operation.
-5. Prefer the GitHub app/plugin for structured pull request and commit-status inspection. Use approved unsandboxed `gh` commands for GitHub Actions checks or logs and for merge operations the plugin does not support. Wait until required checks finish; when they pass and the pull request is mergeable, squash-merge it and delete the remote branch.
-6. Create the approved stable GitHub release from the squash-merge commit on `main`, using an approved unsandboxed `gh` command when the plugin has no release capability. Use the approved title and release notes and mark it as the latest release.
-7. Report the branch, commit, pull request, merge commit, release, validation results, and any downstream release-workflow status that is already available.
+Before using the workflows, verify all of the following. If any item is missing, stop and report the
+prerequisite instead of falling back to a manual release:
 
-Do not silently stage unrelated working-tree changes. When the working tree is mixed, include only files changed for the current task and identify all exclusions in the proposal.
+- `OPENAI_API_KEY` exists as a repository Actions secret.
+- A protected GitHub environment named `release` exists with an appropriate required-reviewer
+  policy. Solo maintainers must not enable self-review prevention unless another reviewer can
+  approve the deployment.
+- `RELEASE_AUTOMATOR_GITHUB_TOKEN` exists only as a secret on the `release` environment. Prefer a
+  fine-grained token scoped to this repository with Contents read/write and Pull requests
+  read/write. Add Workflows read/write only when the approved changes include `.github/workflows/`.
+  The token does not need Checks or Commit statuses permissions; execution and resume workflows
+  read those through the restricted built-in `GITHUB_TOKEN`.
 
-Determine release history from live GitHub Releases immediately before presenting the proposal, not from local tags alone. Prefer a stable release. If a prerelease series newer than the latest stable release already exists, propose stabilizing that prerelease base unless the completed change requires a higher semantic-version bump. Otherwise, choose the next semantic version from the completed change: major for breaking compatibility, minor for backward-compatible functionality, and patch for fixes, documentation, CI, or internal maintenance. Verify the proposed tag again immediately before release creation.
+Never place either secret in workflow inputs, repository variables, TOML, artifacts, logs, plan
+summaries, or command arguments.
 
-Do not treat a failed sandboxed `gh auth status` as proof that GitHub authentication is unavailable. Check GitHub app/plugin access and retry `gh auth status` in an approved unsandboxed command, without displaying or copying the token. If both access paths are unavailable, include that prerequisite in the proposal. If required access remains unavailable after approval, required checks fail, the pull request is blocked or conflicted, the approved tag becomes unavailable, or any material proposal detail must change, stop before merge or release. Explain the blocker and present a complete revised proposal for a new approval before continuing. Never force a merge, bypass required checks, overwrite a remote branch, or replace an existing release tag.
+### Prepare a source snapshot
+
+The planning workflow runs on GitHub and therefore requires the proposed changes to exist in a
+full commit SHA reachable from GitHub. Before creating or switching branches, staging, committing,
+or pushing that source snapshot:
+
+1. Inspect the working tree and identify the exact task files to include and every changed file to
+   exclude. Never include unrelated changes silently.
+2. Run relevant local validation and identify any applicable `docs/RELEASE_CHECKLIST.md` items
+   that remain unverified.
+3. Present one source-snapshot proposal with the exact included and excluded files, validation
+   results, temporary branch `release-source/<concise-kebab-case-task-slug>`, and exact commit
+   message. State that this branch only makes the proposed diff available to the planning workflow
+   and is not the final pull-request branch.
+4. Ask one direct approval question. A general request to push, publish, or release does not replace
+   approval of this exact source snapshot.
+
+After approval, create the temporary branch from the current `main` commit, stage only the approved
+files, commit, push it without force, and record the full commit SHA. Do not open a pull request from
+the temporary branch.
+
+### Plan, approve, and execute
+
+1. Dispatch **Plan a release** with the full source commit SHA, newline-delimited approved paths,
+   `release-automator.toml`, and the intended release mode. Releases are enabled by default; use
+   `no_release` only when the user explicitly requests a merge without a GitHub Release.
+2. Wait for planning to succeed. Read the complete job summary and report the planning run ID, the
+   exact 64-character plan ID, included and excluded files, validations, branch and commit, full
+   pull-request title and body, required checks, merge and cleanup behavior, release tag/channel,
+   release notes, and the GHCR side effect.
+3. End with one direct approval question for that exact plan ID. If any material detail changes,
+   dispatch a fresh plan and present it in full before asking again.
+4. After approval, dispatch **Execute an approved release plan** with the planning run ID and exact
+   plan ID. The protected `release` environment is the final credential boundary. Do not bypass its
+   reviewers or checks.
+5. Let Release Automator create the final `agent/` branch, commit, push, ready-for-review pull
+   request, required-check wait, squash merge, branch cleanup, and GitHub Release. Never duplicate
+   those operations manually, force a merge, overwrite a branch, or replace an existing tag.
+6. After successful execution, delete the temporary `release-source/` branch locally and remotely
+   only if it still points to the approved source commit.
+
+If execution fails after approval, inspect the saved state and use **Resume a release plan** with
+the planning run ID, failed execution/resume run ID, and the same full plan ID. If the plan is stale,
+conflicted, blocked by checks, or otherwise must change, stop and create a new plan rather than
+bypassing the safety boundary.
+
+Report the source commit, planning run, plan ID, pull request, final commit, merge commit, release,
+validation results, and any available downstream workflow status. Publishing a GitHub Release
+triggers `.github/workflows/publish-ghcr.yml`, which publishes the release tag, `latest`, and a
+commit-pinned `sha-<commit>` image tag.

@@ -4,6 +4,7 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Integrated Release Automator v0.3.0 with frozen planning, protected execution, split read/write credentials, and resumable GitHub publication workflows.
 - Added responsive mobile navigation and improved small-screen table layouts.
 - Clarified README Docker configuration parameters.
 - Hardened GitHub Actions caching with an explicit BuildKit scope, non-fatal cache exports, release cache reuse, and automatic closed-PR cache cleanup.
