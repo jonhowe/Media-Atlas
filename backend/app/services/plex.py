@@ -40,20 +40,26 @@ class PlexClient:
         container = _media_container(data)
         return _as_list(container.get("Directory"))
 
-    async def library_items(self, section_key: str) -> list[dict[str, Any]]:
+    async def library_items(self, section_key: str, library_type: str | None = None) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         start = 0
         size = 200
         while True:
+            params = {
+                "includeGuids": "1",
+                "includeCollections": "1",
+                "includeLabels": "1",
+                "X-Plex-Container-Start": str(start),
+                "X-Plex-Container-Size": str(size),
+            }
+            if library_type == "show":
+                # A TV library's default listing contains show records, which do
+                # not carry episode Media/Part file paths. Request episodes so
+                # the sync has paths that can be matched to scanned files.
+                params["type"] = "4"
             data = await self._request(
                 f"/library/sections/{section_key}/all",
-                {
-                    "includeGuids": "1",
-                    "includeCollections": "1",
-                    "includeLabels": "1",
-                    "X-Plex-Container-Start": str(start),
-                    "X-Plex-Container-Size": str(size),
-                },
+                params,
             )
             container = _media_container(data)
             batch = _as_list(container.get("Metadata") or container.get("Video") or container.get("Directory"))
@@ -271,7 +277,10 @@ class PlexSyncManager:
                     """,
                     (f"Fetching {library['title']}.", job_id),
                 )
-                items = await client.library_items(str(library["section_key"]))
+                items = await client.library_items(
+                    str(library["section_key"]),
+                    str(library.get("type") or ""),
+                )
                 total_items += len(items)
                 db.execute("UPDATE plex_sync_jobs SET total_items = ? WHERE id = ?", (total_items, job_id))
                 for item in items:
