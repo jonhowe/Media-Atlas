@@ -11,6 +11,11 @@ from . import db
 from .config import CONFIG
 from .security import auth_warnings, redacted_config
 from .services.plex import status_summary as plex_status_summary
+from .services.media_retention import (
+    get_settings as media_retention_settings,
+    list_connections as media_retention_connections,
+    retention_summary as media_retention_summary,
+)
 
 
 def live_status() -> dict[str, Any]:
@@ -86,10 +91,18 @@ def admin_status() -> dict[str, Any]:
             "plex_syncs": db.query_all(
                 "SELECT * FROM plex_sync_jobs WHERE status IN ('failed', 'interrupted') ORDER BY id DESC LIMIT 5"
             ),
+            "retention_analyses": db.query_all(
+                "SELECT * FROM retention_analysis_jobs WHERE status IN ('failed', 'interrupted') ORDER BY id DESC LIMIT 5"
+            ),
         },
         "retention": {
             "log_retention_days": CONFIG.operations.log_retention_days,
             "staged_output_retention_days": CONFIG.operations.staged_output_retention_days,
+        },
+        "media_retention": {
+            "settings": media_retention_settings(),
+            "connections": media_retention_connections(),
+            "summary": media_retention_summary(),
         },
     }
 
@@ -105,6 +118,7 @@ def diagnostics_status() -> dict[str, Any]:
         "storage": status["storage"],
         "recent_failures": status["recent_failures"],
         "retention": status["retention"],
+        "media_retention": status["media_retention"],
     }
 
 
@@ -121,6 +135,7 @@ def metrics_status() -> dict[str, Any]:
         "media": media,
         "jobs": job_state_counts(),
         "plex": plex_status_summary(),
+        "media_retention": media_retention_summary(),
         "migrations": db.migration_status(),
     }
 
@@ -131,6 +146,8 @@ def job_state_counts() -> dict[str, Any]:
         "transcode_runs": _status_counts("transcode_runs"),
         "transcode_items": _status_counts("transcode_run_items"),
         "plex_syncs": _status_counts("plex_sync_jobs"),
+        "retention_analyses": _status_counts("retention_analysis_jobs"),
+        "retention_actions": _status_counts("retention_actions"),
     }
 
 
@@ -221,7 +238,14 @@ def _plex_check() -> dict[str, Any]:
 
 
 def _status_counts(table: str) -> dict[str, int]:
-    allowed = {"scan_jobs", "transcode_runs", "transcode_run_items", "plex_sync_jobs"}
+    allowed = {
+        "scan_jobs",
+        "transcode_runs",
+        "transcode_run_items",
+        "plex_sync_jobs",
+        "retention_analysis_jobs",
+        "retention_actions",
+    }
     if table not in allowed:
         return {}
     rows = db.query_all(f"SELECT status, COUNT(*) AS count FROM {table} GROUP BY status")

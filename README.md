@@ -2,7 +2,7 @@
 
 # Media Atlas
 
-Media Atlas is a local-first media inventory and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs.
+Media Atlas is a local-first media inventory, retention-review, and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, correlates requested-but-unwatched media across Seerr and Arr services, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs.
 
 Media Atlas stages transcode output separately from originals by default. Replacing a source file is only available through an explicit manual publish action for verified outputs, requires two confirmations, and moves the original into transcode backup storage first.
 
@@ -12,6 +12,8 @@ Media Atlas stages transcode output separately from originals by default. Replac
 - Recursively scan media files and skip unchanged files on rescans.
 - Store raw `ffprobe` JSON plus normalized codec, container, stream, bitrate, duration, HDR, subtitle, and audio fields.
 - Optionally sync Plex libraries for title, year, show/season/episode, collection, genre, label, watched state, and match status.
+- Correlate Seerr requests, Sonarr/Radarr-managed files, and Plex history to report whole movies or series that nobody has watched after a configurable waiting period.
+- Export retention candidates, create a transcode plan without starting it, or delete one freshly revalidated copy through its owning Arr service with a typed confirmation and immutable audit trail.
 - Browse, search, filter, report, and export inventory data.
 - Classify files as Easy Win, Remux Only, Review, Skip, Already Modern, Error, or Missing.
 - Generate staged transcode plans from candidates.
@@ -98,6 +100,16 @@ services:
       MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS: "${MEDIA_ATLAS_STAGED_OUTPUT_RETENTION_DAYS:-0}"
       MEDIA_ATLAS_PLEX_URL: "${MEDIA_ATLAS_PLEX_URL:-}"
       MEDIA_ATLAS_PLEX_TOKEN: "${MEDIA_ATLAS_PLEX_TOKEN:-}"
+      MEDIA_ATLAS_SEERR_URL: "${MEDIA_ATLAS_SEERR_URL:-}"
+      MEDIA_ATLAS_SEERR_API_KEY: "${MEDIA_ATLAS_SEERR_API_KEY:-}"
+      MEDIA_ATLAS_SONARR_URL: "${MEDIA_ATLAS_SONARR_URL:-}"
+      MEDIA_ATLAS_SONARR_API_KEY: "${MEDIA_ATLAS_SONARR_API_KEY:-}"
+      MEDIA_ATLAS_SONARR_SEERR_SERVICE_ID: "${MEDIA_ATLAS_SONARR_SEERR_SERVICE_ID:-}"
+      MEDIA_ATLAS_SONARR_PATH_MAPPINGS: "${MEDIA_ATLAS_SONARR_PATH_MAPPINGS:-}"
+      MEDIA_ATLAS_RADARR_URL: "${MEDIA_ATLAS_RADARR_URL:-}"
+      MEDIA_ATLAS_RADARR_API_KEY: "${MEDIA_ATLAS_RADARR_API_KEY:-}"
+      MEDIA_ATLAS_RADARR_SEERR_SERVICE_ID: "${MEDIA_ATLAS_RADARR_SEERR_SERVICE_ID:-}"
+      MEDIA_ATLAS_RADARR_PATH_MAPPINGS: "${MEDIA_ATLAS_RADARR_PATH_MAPPINGS:-}"
     volumes:
       - ./data:/app/data
       - ./reports:/app/reports
@@ -196,7 +208,16 @@ After the container is running:
 2. Add media roots using container paths such as `/media`, `/media/Movies`, or `/media/TV`.
 3. Start a scan from the Scans page and watch progress from the dashboard or scan detail view.
 4. Optional: configure Plex in Settings, add path mappings from Plex host paths to container paths, then run a manual Plex sync.
-5. Review Library, Candidates, Reports, and Transcode Planner before starting staged transcode runs.
+5. Optional: configure Seerr and each Sonarr/Radarr instance in Settings, including the Seerr service ID and any service-to-container path mappings, then run Retention analysis.
+6. Review Library, Quality Candidates, Retention, Reports, and Transcode Planner before starting staged transcode runs or taking a deletion action.
+
+## Media Retention Review
+
+Retention analysis is separate from log and staged-output housekeeping. A candidate must be requested and available in Seerr, have managed files in its owning Sonarr/Radarr instance, be at least 90 days beyond the newer of its latest request or latest file-added date, map every managed file to Plex, and have no Plex play by any account since that eligibility date. Movies are evaluated as whole copies; shows are evaluated as whole-series copies. A Plex item with multiple versions protects every associated copy when it has qualifying play evidence.
+
+Analysis runs only on demand unless the disabled-by-default daily schedule is enabled in Settings. Plex or Seerr failure rejects the new snapshot. A failed Arr instance is excluded from that snapshot and shown as a source warning. Incomplete mapping is retained as a diagnostic result and never enables deletion.
+
+Deletion is always one candidate at a time. The UI asks for confirmation and exact `DELETE <title>` text, then the backend refreshes Plex and revalidates Seerr requests, Arr IDs/files/sizes, mappings, dates, and play history. Radarr deletes the movie with files and without adding an import exclusion; Sonarr deletes the whole series with files and without adding an import-list exclusion. Media Atlas never unlinks inventory rows directly, never clears Seerr request data, and never starts a transcode automatically. If Arr deletion succeeds but Seerr reconciliation fails, the successful deletion is audited with a warning and only the non-clearing Seerr status update can be retried.
 
 ## Transcode Profiles
 
@@ -248,6 +269,13 @@ Most installs can leave these at the example defaults. Adjust them when changing
 | `MEDIA_ATLAS_MARK_MISSING_FILES` | Mark missing files | `.env` | If `true`, rescans mark previously seen files as missing when the root is available but the file is gone. Unavailable roots are skipped so whole libraries are not marked missing accidentally. |
 | `MEDIA_ATLAS_PLEX_TOKEN` | Plex token default | `.env` or UI Settings | Optional default Plex token. It can also be saved from the Settings page. The API returns only redacted token state. |
 | `MEDIA_ATLAS_PLEX_URL` | Plex server URL default | `.env` or UI Settings | Optional default Plex server URL, for example `http://192.168.1.106:32400`. It can also be saved from the Settings page. |
+| `MEDIA_ATLAS_SEERR_URL` / `MEDIA_ATLAS_SEERR_API_KEY` | Default Seerr connection | `.env` or UI Settings | Seeds the single Seerr connection when no stored Seerr connection exists. Secrets are write-only in API/UI responses. |
+| `MEDIA_ATLAS_SONARR_URL` / `MEDIA_ATLAS_SONARR_API_KEY` | Default Sonarr connection | `.env` or UI Settings | Seeds one Sonarr connection. Add additional standard/4K instances in the UI. |
+| `MEDIA_ATLAS_SONARR_SEERR_SERVICE_ID` | Sonarr service ID | `.env` or UI Settings | Matches Seerr requests to the seeded Sonarr instance. Required to disambiguate multiple Sonarr instances. |
+| `MEDIA_ATLAS_SONARR_PATH_MAPPINGS` | Sonarr path mappings | `.env` or UI Settings | Semicolon-delimited `source=container` pairs, for example `/tv=/media/TV;/tv4k=/media/TV 4K`. |
+| `MEDIA_ATLAS_RADARR_URL` / `MEDIA_ATLAS_RADARR_API_KEY` | Default Radarr connection | `.env` or UI Settings | Seeds one Radarr connection. Add additional standard/4K instances in the UI. |
+| `MEDIA_ATLAS_RADARR_SEERR_SERVICE_ID` | Radarr service ID | `.env` or UI Settings | Matches Seerr requests to the seeded Radarr instance. Required to disambiguate multiple Radarr instances. |
+| `MEDIA_ATLAS_RADARR_PATH_MAPPINGS` | Radarr path mappings | `.env` or UI Settings | Semicolon-delimited `source=container` pairs, for example `/movies=/media/Movies`. |
 | `MEDIA_ATLAS_PORT` | HTTP port | `.env` and `docker-compose.yml` | In `.env`, controls the host port published by Compose. Inside the container, Compose passes `8000` as the application port. Local dev can set this directly. |
 | `MEDIA_ATLAS_READINESS_MIN_FREE_BYTES` | Readiness disk threshold | advanced env | Minimum free bytes required for readiness disk checks. Default: `268435456` bytes. This is separate from transcode preflight free-space checks. |
 | `MEDIA_ATLAS_REPORTS_DIR` | Reports directory | `docker-compose.yml` environment | Directory for generated reports/exports. Docker default: `/app/reports`, normally bind-mounted to `./reports`. |

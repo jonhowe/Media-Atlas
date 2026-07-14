@@ -22,6 +22,7 @@ from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
 from .health import admin_status, diagnostics_status, live_status, metrics_status, readiness_status
 from .logging_config import configure_logging
 from .security import (
+    authenticated_user,
     auth_status,
     clear_session_cookie,
     login,
@@ -45,6 +46,27 @@ from .services.plex import (
     stored_libraries as stored_plex_libraries,
     unmatched as plex_unmatched,
 )
+from .services.media_retention import (
+    AmbiguousDeleteError,
+    MediaRetentionError,
+    MediaRetentionManager,
+    candidate_export_rows,
+    create_candidate_transcode_plan,
+    create_connection as create_retention_connection,
+    delete_candidate as delete_retention_candidate,
+    delete_connection as delete_retention_connection,
+    get_settings as get_media_retention_settings,
+    list_actions as list_retention_actions,
+    list_analysis_jobs as list_retention_analysis_jobs,
+    list_candidates as list_retention_candidates,
+    list_connections as list_retention_connections,
+    read_analysis_job as read_retention_analysis_job,
+    read_candidate as read_retention_candidate,
+    retention_summary,
+    retry_seerr_reconciliation,
+    save_settings as save_media_retention_settings,
+    update_connection as update_retention_connection,
+)
 from .services.retention import apply_retention
 from .services.scanner import ScanManager
 from .services.transcodes import TranscodeManager, create_plan, get_plan, transcode_savings_stats
@@ -64,6 +86,7 @@ app.add_middleware(
 scan_manager = ScanManager()
 transcode_manager = TranscodeManager()
 plex_manager = PlexSyncManager()
+media_retention_manager = MediaRetentionManager(plex_manager)
 
 
 class RootCreate(BaseModel):
@@ -134,6 +157,48 @@ class PlexSettingsUpdate(BaseModel):
     path_mappings: list[PlexPathMapping] | None = None
 
 
+class RetentionPathMapping(BaseModel):
+    source_path_prefix: str = Field(min_length=1)
+    media_atlas_path_prefix: str = Field(min_length=1)
+
+
+class RetentionConnectionCreate(BaseModel):
+    service_type: Literal["seerr", "sonarr", "radarr"]
+    name: str = Field(min_length=1, max_length=120)
+    server_url: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+    enabled: bool = True
+    seerr_service_id: int | None = None
+    path_mappings: list[RetentionPathMapping] = Field(default_factory=list)
+
+
+class RetentionConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    server_url: str | None = Field(default=None, min_length=1)
+    api_key: str | None = None
+    clear_api_key: bool = False
+    enabled: bool | None = None
+    seerr_service_id: int | None = None
+    path_mappings: list[RetentionPathMapping] | None = None
+
+
+class RetentionSettingsUpdate(BaseModel):
+    minimum_unwatched_days: int | None = Field(default=None, ge=1, le=3650)
+    schedule_enabled: bool | None = None
+    schedule_time: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+
+
+class RetentionTranscodePlanCreate(BaseModel):
+    profile_id: int
+    file_ids: list[int] | None = None
+    name: str | None = Field(default=None, max_length=180)
+
+
+class RetentionDeleteRequest(BaseModel):
+    confirmation_text: str = Field(min_length=1)
+
+
 @app.middleware("http")
 async def request_security_middleware(request: Request, call_next: Any) -> Response:
     request_id = request.headers.get("X-Request-ID") or secrets.token_hex(8)
@@ -166,6 +231,7 @@ async def startup() -> None:
     apply_retention()
     await scan_manager.recover_startup_jobs()
     await plex_manager.recover_startup_jobs()
+    await media_retention_manager.recover_startup_jobs()
     await transcode_manager.recover_startup_jobs()
 
 
@@ -374,6 +440,202 @@ async def retry_plex_sync(job_id: int) -> dict[str, Any]:
 @app.get("/api/plex/unmatched")
 async def get_plex_unmatched(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
     return plex_unmatched(limit)
+
+
+@app.get("/api/retention/settings")
+async def media_retention_settings() -> dict[str, Any]:
+    return get_media_retention_settings()
+
+
+@app.put("/api/retention/settings")
+async def update_media_retention_settings(payload: RetentionSettingsUpdate) -> dict[str, Any]:
+    try:
+        return save_media_retention_settings(payload.model_dump(exclude_unset=True))
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/connections")
+async def get_retention_connections() -> list[dict[str, Any]]:
+    return list_retention_connections()
+
+
+@app.post("/api/retention/connections")
+async def add_retention_connection(payload: RetentionConnectionCreate) -> dict[str, Any]:
+    try:
+        return create_retention_connection(payload.model_dump())
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/retention/connections/{connection_id}")
+async def patch_retention_connection(
+    connection_id: int, payload: RetentionConnectionUpdate
+) -> dict[str, Any]:
+    try:
+        return update_retention_connection(connection_id, payload.model_dump(exclude_unset=True))
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
+
+
+@app.delete("/api/retention/connections/{connection_id}")
+async def remove_retention_connection(connection_id: int) -> dict[str, Any]:
+    try:
+        delete_retention_connection(connection_id)
+        return {"deleted": True, "id": connection_id}
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=409 if "history" in str(exc).lower() else 404, detail=str(exc)) from exc
+
+
+@app.post("/api/retention/connections/{connection_id}/test")
+async def test_retention_connection(connection_id: int) -> dict[str, Any]:
+    try:
+        return await media_retention_manager.test_connection(connection_id)
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/summary")
+async def get_retention_summary() -> dict[str, Any]:
+    return retention_summary()
+
+
+@app.post("/api/retention/analyses")
+async def start_retention_analysis() -> dict[str, Any]:
+    try:
+        return await media_retention_manager.start_analysis("manual")
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/analyses")
+async def get_retention_analyses(limit: int = Query(default=30, ge=1, le=200)) -> list[dict[str, Any]]:
+    return list_retention_analysis_jobs(limit)
+
+
+@app.get("/api/retention/analyses/{job_id}")
+async def get_retention_analysis(job_id: int) -> dict[str, Any]:
+    job = read_retention_analysis_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Retention analysis job not found.")
+    return job
+
+
+@app.get("/api/retention/analyses/{job_id}/events")
+async def retention_analysis_events(job_id: int) -> StreamingResponse:
+    async def stream() -> Any:
+        while True:
+            job = read_retention_analysis_job(job_id)
+            if not job:
+                yield "event: error\ndata: {\"detail\":\"Retention analysis job not found\"}\n\n"
+                return
+            yield f"data: {json.dumps(job)}\n\n"
+            if job["status"] not in {"queued", "running"}:
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.post("/api/retention/analyses/{job_id}/cancel")
+async def cancel_retention_analysis(job_id: int) -> dict[str, Any]:
+    try:
+        media_retention_manager.cancel_analysis(job_id)
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return await get_retention_analysis(job_id)
+
+
+@app.post("/api/retention/analyses/{job_id}/retry")
+async def retry_retention_analysis(job_id: int) -> dict[str, Any]:
+    try:
+        return await media_retention_manager.retry_analysis(job_id)
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/candidates")
+async def get_retention_candidates(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+    status: str | None = None,
+    media_type: str | None = None,
+    connection_id: int | None = None,
+    query: str | None = None,
+    sort: str = "size_bytes",
+    direction: str = "desc",
+) -> dict[str, Any]:
+    return list_retention_candidates(
+        page=page,
+        page_size=page_size,
+        status=status,
+        media_type=media_type,
+        connection_id=connection_id,
+        query=query,
+        sort=sort,
+        direction=direction,
+    )
+
+
+@app.get("/api/retention/candidates/{candidate_id}")
+async def get_retention_candidate(candidate_id: int) -> dict[str, Any]:
+    candidate = read_retention_candidate(candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Retention candidate not found.")
+    return candidate
+
+
+@app.post("/api/retention/candidates/{candidate_id}/transcode-plan")
+async def create_retention_transcode_plan(
+    candidate_id: int, payload: RetentionTranscodePlanCreate, request: Request
+) -> dict[str, Any]:
+    try:
+        return create_candidate_transcode_plan(
+            candidate_id,
+            payload.profile_id,
+            payload.file_ids,
+            payload.name,
+            authenticated_user(request),
+        )
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/retention/candidates/{candidate_id}/delete")
+async def remove_retention_candidate(
+    candidate_id: int, payload: RetentionDeleteRequest, request: Request
+) -> dict[str, Any]:
+    try:
+        return await delete_retention_candidate(
+            candidate_id,
+            payload.confirmation_text,
+            authenticated_user(request),
+            plex_manager=plex_manager,
+        )
+    except AmbiguousDeleteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/actions")
+async def get_retention_actions(
+    limit: int = Query(default=100, ge=1, le=500), candidate_id: int | None = None
+) -> list[dict[str, Any]]:
+    return list_retention_actions(limit, candidate_id)
+
+
+@app.post("/api/retention/actions/{action_id}/retry-seerr")
+async def retry_retention_seerr(action_id: int, request: Request) -> dict[str, Any]:
+    try:
+        return await retry_seerr_reconciliation(action_id, authenticated_user(request))
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/retention/retention-candidates.csv")
+async def export_retention_candidates() -> Response:
+    return _csv_response("retention-candidates.csv", candidate_export_rows())
 
 
 @app.get("/api/roots")
@@ -697,6 +959,8 @@ async def export_csv(export_name: str) -> Response:
         rows = _group_report("resolution_bucket")
     elif export_name == "largest-files.csv":
         rows = db.query_all("SELECT * FROM files ORDER BY size_bytes DESC LIMIT 500")
+    elif export_name == "retention-candidates.csv":
+        rows = candidate_export_rows()
     else:
         raise HTTPException(status_code=404, detail="Export not found.")
     return _csv_response(export_name, rows)

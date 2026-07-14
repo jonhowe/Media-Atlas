@@ -21,6 +21,11 @@ on:
         required: true
         default: false
         type: boolean
+      no_latest:
+        description: Create the GitHub Release without marking it latest.
+        required: true
+        default: false
+        type: boolean
       branch:
         description: Optional final branch slug override.
         required: false
@@ -102,13 +107,14 @@ jobs:
 
       - name: Create and print the frozen plan
         id: plan
-        uses: jonhowe/Release-Automator@c0a68e9d4bb25476f3e793f46125a095200d9513 # v0.3.0
+        uses: jonhowe/Release-Automator@a355ea4dba071c2b86bd67c2e7b52cfc28ad12a7 # v0.4.0
         with:
           mode: plan
           repo-path: target
           include-paths: ${{ inputs.include_paths }}
           config-path: ${{ inputs.config_path }}
           no-release: ${{ inputs.no_release }}
+          no-latest: ${{ inputs.no_latest }}
           branch: ${{ inputs.branch }}
           commit-message: ${{ inputs.commit_message }}
           pr-title: ${{ inputs.pr_title }}

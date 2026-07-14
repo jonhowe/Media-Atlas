@@ -4,6 +4,10 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Added Media Retention Review, correlating paginated Seerr requests, multiple Sonarr/Radarr instances, Media Atlas inventory, and Plex history into atomic whole-movie/whole-series candidate snapshots.
+- Added redacted retention connection management, per-service path mappings and Seerr service IDs, an optional disabled-by-default 03:00 schedule, source warnings, CSV export, responsive Retention UI, dashboard metrics, and analysis/action history.
+- Added guarded transcode-plan handoff and single-candidate Arr deletion with typed confirmation, fresh source revalidation, no import exclusions, non-clearing Seerr reconciliation, ambiguous-timeout handling, and immutable remediation audits.
+- Added SQLite migration `0008_media_retention_review`; rollback to an older image should restore the pre-upgrade database backup. Added optional Seerr/Sonarr/Radarr environment seeds and deployment/operations guidance.
 - Fixed Release Automator backend validation to use an isolated uv environment with the project requirements installed.
 - Integrated Release Automator v0.3.0 with frozen planning, protected execution, split read/write credentials, and resumable GitHub publication workflows.
 - Added responsive mobile navigation and improved small-screen table layouts.

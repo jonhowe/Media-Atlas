@@ -48,7 +48,7 @@ jobs:
 
       - name: Execute the exact approved plan
         id: execute
-        uses: jonhowe/Release-Automator@c0a68e9d4bb25476f3e793f46125a095200d9513 # v0.3.0
+        uses: jonhowe/Release-Automator@a355ea4dba071c2b86bd67c2e7b52cfc28ad12a7 # v0.4.0
         with:
           mode: execute
           repo-path: target
