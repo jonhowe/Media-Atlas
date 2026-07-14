@@ -1,5 +1,14 @@
 # Repository Instructions
 
+## GitHub authentication
+
+The connected GitHub app and the repository's SSH remote are valid authentication routes. A stale
+or invalid result from `gh auth status` alone must not trigger a request for the user to
+re-authenticate. Use the connected GitHub app for supported GitHub API operations, the SSH remote
+for Git fetches and pushes, and an authenticated browser session for unsupported workflow or
+settings operations. Ask the user about authentication only after an operation required for the
+task actually fails across the available authentication routes.
+
 ## GitHub publication with Release Automator
 
 After completing a task that changes repository files, offer to publish the completed work through
