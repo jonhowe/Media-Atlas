@@ -692,11 +692,121 @@ label {
   justify-content: flex-end;
 }
 
+.retentionFilters {
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(150px, auto));
+}
+
+.retentionCandidatesTable td:nth-child(2) {
+  min-width: 320px;
+}
+
+.retentionCandidatesTable .mobileStackPrimary {
+  min-width: 210px;
+}
+
+.warningList,
+.retentionFileList,
+.retentionConnectionList {
+  display: grid;
+  gap: 10px;
+}
+
+.warningList > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.retentionFileList > div {
+  align-items: start;
+  border-bottom: 1px solid var(--divider-soft);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-bottom: 10px;
+}
+
+.retentionFileList > div > :last-child {
+  text-align: right;
+}
+
+.retentionDrawerActions {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  bottom: 0;
+  padding: 12px;
+  position: sticky;
+}
+
+.dialogBackdrop {
+  align-items: center;
+  background: var(--backdrop);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 50;
+}
+
+.dialogPanel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+  display: grid;
+  gap: 16px;
+  max-height: 90vh;
+  max-width: 760px;
+  overflow: auto;
+  padding: 20px;
+  width: 100%;
+}
+
+.retentionTranscodeForm {
+  grid-template-columns: minmax(240px, 1.5fr) minmax(220px, 1fr);
+}
+
+.retentionTranscodeFiles {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.retentionTranscodeFiles .checkRow > span,
+.retentionTranscodeFiles .checkRow > span > span {
+  display: block;
+}
+
+.retentionScheduleGrid {
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto;
+}
+
+.retentionConnectionForm {
+  grid-template-columns: repeat(5, minmax(130px, 1fr)) auto;
+}
+
+.retentionConnectionCard {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.retentionConnectionEditGrid {
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+}
+
 .drawerBackdrop {
   background: var(--backdrop);
   inset: 0;
   position: fixed;
-  z-index: 20;
+  z-index: 45;
 }
 
 .drawer {
@@ -884,6 +994,10 @@ label {
   .formGrid,
   .formGrid.plexSettingsGrid,
   .formGrid.plexSetupGrid,
+  .formGrid.retentionScheduleGrid,
+  .formGrid.retentionConnectionForm,
+  .formGrid.retentionConnectionEditGrid,
+  .formGrid.retentionTranscodeForm,
   .mappingRow,
   .detailGrid,
   .storageRow,
@@ -1152,6 +1266,31 @@ label {
     width: 100%;
   }
 
+  .dialogBackdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .dialogPanel {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    max-height: 94dvh;
+    padding: 16px;
+  }
+
+  .retentionCandidatesTable td:nth-child(2),
+  .retentionCandidatesTable .mobileStackPrimary {
+    min-width: 0;
+  }
+
+  .retentionFileList > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .retentionFileList > div > :last-child {
+    text-align: left;
+  }
+
   .mobileBottomNav {
     background: color-mix(in srgb, var(--surface) 92%, transparent);
     backdrop-filter: blur(16px);
@@ -1161,7 +1300,7 @@ label {
     box-shadow: 0 -14px 38px rgba(15, 23, 42, 0.14);
     display: grid;
     gap: 4px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     left: 0;
     padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
     position: fixed;
@@ -1232,6 +1371,6 @@ label {
   }
 
   .mobileBottomNav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }

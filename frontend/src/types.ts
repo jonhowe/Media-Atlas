@@ -211,6 +211,143 @@ export type PlexStatus = {
   latest_error?: string | null;
 };
 
+export type RetentionPathMapping = {
+  source_path_prefix: string;
+  media_atlas_path_prefix: string;
+};
+
+export type RetentionConnection = {
+  id: number;
+  service_type: "seerr" | "sonarr" | "radarr";
+  name: string;
+  server_url: string;
+  enabled: boolean;
+  seerr_service_id?: number | null;
+  path_mappings: RetentionPathMapping[];
+  api_key_configured: boolean;
+  api_key_hint: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RetentionSettings = {
+  minimum_unwatched_days: number;
+  schedule_enabled: boolean;
+  schedule_time: string;
+  timeout_seconds: number;
+};
+
+export type RetentionWarning = {
+  source: string;
+  connection_id?: number;
+  message: string;
+};
+
+export type RetentionAnalysisJob = {
+  id: number;
+  status: string;
+  trigger_type: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  progress_percent: number;
+  current_stage?: string | null;
+  message?: string | null;
+  error_message?: string | null;
+  warnings: RetentionWarning[];
+  candidate_count: number;
+  diagnostic_count: number;
+  total_size_bytes: number;
+  cancel_requested: boolean;
+};
+
+export type RetentionSummary = {
+  candidate_count: number;
+  diagnostic_count: number;
+  total_size_bytes: number;
+  latest_analysis?: RetentionAnalysisJob | null;
+  snapshot_job_id?: number | null;
+  configured: boolean;
+};
+
+export type RetentionCandidateFile = {
+  id: number;
+  candidate_id: number;
+  service_file_id: number;
+  path: string;
+  normalized_path: string;
+  size_bytes: number;
+  date_added?: string | null;
+  media_atlas_file_id?: number | null;
+  plex_item_id?: number | null;
+  plex_rating_key?: string | null;
+  match_status: string;
+  filename?: string | null;
+  recommendation_category?: string | null;
+};
+
+export type RetentionRequest = {
+  id?: number | null;
+  created_at: string;
+  requester: string;
+  is_4k: boolean;
+};
+
+export type RetentionAction = {
+  id: number;
+  candidate_id: number;
+  action_type: "transcode_plan" | "delete" | "seerr_reconcile";
+  status: string;
+  requested_by?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  transcode_plan_id?: number | null;
+  title: string;
+  connection_name: string;
+  result?: Record<string, unknown> | null;
+  error_message?: string | null;
+};
+
+export type RetentionCandidate = {
+  id: number;
+  analysis_job_id: number;
+  connection_id: number;
+  connection_name: string;
+  service_type: "sonarr" | "radarr";
+  service_item_id: number;
+  seerr_media_id?: number | null;
+  media_type: "movie" | "tv";
+  title: string;
+  year?: number | null;
+  tmdb_id?: number | null;
+  tvdb_id?: number | null;
+  is_4k: boolean;
+  size_bytes: number;
+  file_count: number;
+  matched_file_count: number;
+  mapping_coverage_percent: number;
+  requesters: string[];
+  requests: RetentionRequest[];
+  latest_request_at: string;
+  available_since: string;
+  eligible_since: string;
+  reason: string;
+  status: "active" | "diagnostic";
+  action_state?: string | null;
+  available_actions: Array<"transcode_plan" | "delete">;
+  files?: RetentionCandidateFile[];
+  actions?: RetentionAction[];
+};
+
+export type RetentionCandidatePage = {
+  items: RetentionCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  snapshot_job_id?: number | null;
+};
+
 export type Summary = {
   total_files: number;
   total_size_bytes: number;

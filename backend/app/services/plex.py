@@ -66,6 +66,38 @@ class PlexClient:
                 break
         return items
 
+    async def history(self, since: datetime) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        start = 0
+        size = 500
+        while True:
+            data = await self._request(
+                "/status/sessions/history/all",
+                {
+                    "sort": "viewedAt:desc",
+                    "X-Plex-Container-Start": str(start),
+                    "X-Plex-Container-Size": str(size),
+                },
+            )
+            container = _media_container(data)
+            batch = _as_list(container.get("Metadata") or container.get("Video"))
+            if not batch:
+                break
+            reached_cutoff = False
+            for item in batch:
+                viewed_at = _plex_datetime(item.get("viewedAt"))
+                if viewed_at and viewed_at < since:
+                    reached_cutoff = True
+                    continue
+                items.append(item)
+            if reached_cutoff or len(batch) < size:
+                break
+            start += len(batch)
+            total_size = _as_int(container.get("totalSize")) or _as_int(container.get("TotalSize"))
+            if total_size is not None and start >= total_size:
+                break
+        return items
+
     async def _request(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         try:
             import httpx
@@ -186,6 +218,17 @@ class PlexSyncManager:
         if not existing:
             raise PlexError("Plex sync job not found.")
         return await self.start_sync()
+
+    async def sync_now(self) -> dict[str, Any]:
+        job = await self.start_sync()
+        task = self._task
+        if task:
+            await task
+        result = read_sync_job(int(job["id"]))
+        if not result or result.get("status") != "succeeded":
+            detail = (result or {}).get("error_message") or (result or {}).get("message") or "Plex sync failed."
+            raise PlexError(str(detail))
+        return result
 
     def cancel_sync(self, job_id: int) -> None:
         db.execute(
@@ -777,3 +820,13 @@ def _plex_time(value: Any) -> str | None:
     if number is None:
         return str(value) if value else None
     return datetime.fromtimestamp(number, UTC).isoformat(timespec="seconds")
+
+
+def _plex_datetime(value: Any) -> datetime | None:
+    text = _plex_time(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None

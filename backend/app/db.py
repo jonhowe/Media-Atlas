@@ -706,6 +706,140 @@ MIGRATIONS: list[tuple[str, str]] = [
           ON plex_file_matches(plex_item_id, match_status);
         """,
     ),
+    (
+        "0008_media_retention_review",
+        """
+        CREATE TABLE IF NOT EXISTS retention_connections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_type TEXT NOT NULL CHECK(service_type IN ('seerr', 'sonarr', 'radarr')),
+          name TEXT NOT NULL,
+          server_url TEXT NOT NULL,
+          api_key TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          seerr_service_id INTEGER,
+          path_mappings_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_retention_one_seerr
+          ON retention_connections(service_type) WHERE service_type = 'seerr';
+        CREATE INDEX IF NOT EXISTS idx_retention_connections_type
+          ON retention_connections(service_type, enabled);
+
+        CREATE TABLE IF NOT EXISTS retention_analysis_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          status TEXT NOT NULL,
+          trigger_type TEXT NOT NULL DEFAULT 'manual',
+          created_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          progress_percent REAL NOT NULL DEFAULT 0,
+          current_stage TEXT,
+          message TEXT,
+          error_message TEXT,
+          warnings_json TEXT NOT NULL DEFAULT '[]',
+          candidate_count INTEGER NOT NULL DEFAULT 0,
+          diagnostic_count INTEGER NOT NULL DEFAULT 0,
+          total_size_bytes INTEGER NOT NULL DEFAULT 0,
+          cancel_requested INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_analysis_status
+          ON retention_analysis_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_retention_analysis_created
+          ON retention_analysis_jobs(created_at);
+
+        CREATE TABLE IF NOT EXISTS retention_candidates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          analysis_job_id INTEGER NOT NULL REFERENCES retention_analysis_jobs(id) ON DELETE CASCADE,
+          connection_id INTEGER NOT NULL REFERENCES retention_connections(id),
+          service_item_id INTEGER NOT NULL,
+          seerr_media_id INTEGER,
+          media_type TEXT NOT NULL CHECK(media_type IN ('movie', 'tv')),
+          title TEXT NOT NULL,
+          year INTEGER,
+          tmdb_id INTEGER,
+          tvdb_id INTEGER,
+          is_4k INTEGER NOT NULL DEFAULT 0,
+          size_bytes INTEGER NOT NULL,
+          file_count INTEGER NOT NULL,
+          matched_file_count INTEGER NOT NULL,
+          requesters_json TEXT NOT NULL DEFAULT '[]',
+          requests_json TEXT NOT NULL DEFAULT '[]',
+          latest_request_at TEXT NOT NULL,
+          available_since TEXT NOT NULL,
+          eligible_since TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          action_state TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(analysis_job_id, connection_id, service_item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_candidates_job_status
+          ON retention_candidates(analysis_job_id, status);
+        CREATE INDEX IF NOT EXISTS idx_retention_candidates_size
+          ON retention_candidates(size_bytes);
+
+        CREATE TABLE IF NOT EXISTS retention_candidate_files (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          candidate_id INTEGER NOT NULL REFERENCES retention_candidates(id) ON DELETE CASCADE,
+          service_file_id INTEGER NOT NULL,
+          path TEXT NOT NULL,
+          normalized_path TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          date_added TEXT,
+          media_atlas_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+          plex_item_id INTEGER REFERENCES plex_items(id) ON DELETE SET NULL,
+          plex_rating_key TEXT,
+          match_status TEXT NOT NULL,
+          UNIQUE(candidate_id, service_file_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_candidate_files_candidate
+          ON retention_candidate_files(candidate_id);
+
+        CREATE TABLE IF NOT EXISTS plex_watch_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          analysis_job_id INTEGER NOT NULL REFERENCES retention_analysis_jobs(id) ON DELETE CASCADE,
+          history_key TEXT,
+          rating_key TEXT NOT NULL,
+          account_id INTEGER,
+          viewed_at TEXT NOT NULL,
+          media_type TEXT,
+          title TEXT,
+          raw_json TEXT NOT NULL,
+          UNIQUE(analysis_job_id, history_key, rating_key, account_id, viewed_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_plex_watch_events_job_rating
+          ON plex_watch_events(analysis_job_id, rating_key, viewed_at);
+
+        CREATE TABLE IF NOT EXISTS retention_actions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          candidate_id INTEGER NOT NULL REFERENCES retention_candidates(id),
+          action_type TEXT NOT NULL CHECK(action_type IN ('transcode_plan', 'delete', 'seerr_reconcile')),
+          status TEXT NOT NULL,
+          requested_by TEXT,
+          created_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          transcode_plan_id INTEGER REFERENCES transcode_plans(id) ON DELETE SET NULL,
+          snapshot_json TEXT NOT NULL,
+          result_json TEXT,
+          error_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_actions_candidate
+          ON retention_actions(candidate_id, created_at);
+        CREATE TRIGGER IF NOT EXISTS retention_actions_no_delete
+          BEFORE DELETE ON retention_actions
+          BEGIN
+            SELECT RAISE(ABORT, 'retention action audit records cannot be deleted');
+          END;
+        CREATE TRIGGER IF NOT EXISTS retention_actions_terminal_immutable
+          BEFORE UPDATE ON retention_actions
+          WHEN OLD.finished_at IS NOT NULL
+          BEGIN
+            SELECT RAISE(ABORT, 'completed retention action audit records are immutable');
+          END;
+        """,
+    ),
 ]
 
 

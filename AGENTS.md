@@ -13,7 +13,7 @@ Release Automator is installed through these manual GitHub Actions workflows:
 - `release-automator-resume.yml` resumes a failed approved run without repeating completed work.
 
 The workflows pin `jonhowe/Release-Automator` to the immutable commit for Marketplace release
-`v0.3.0`. Repository policy is defined in `release-automator.toml`.
+`v0.4.0`. Repository policy is defined in `release-automator.toml`.
 
 ### Required repository setup
 
@@ -58,7 +58,9 @@ the temporary branch.
 
 1. Dispatch **Plan a release** with the full source commit SHA, newline-delimited approved paths,
    `release-automator.toml`, and the intended release mode. Releases are enabled by default; use
-   `no_release` only when the user explicitly requests a merge without a GitHub Release.
+   `no_release` only when the user explicitly requests a merge without a GitHub Release. Use
+   `no_latest` only when the user explicitly wants a stable release that does not replace the
+   repository's current latest release; prereleases are never marked latest.
 2. Wait for planning to succeed. Read the complete job summary and report the planning run ID, the
    exact 64-character plan ID, included and excluded files, validations, branch and commit, full
    pull-request title and body, required checks, merge and cleanup behavior, release tag/channel,

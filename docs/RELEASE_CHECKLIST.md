@@ -32,3 +32,5 @@ Use this checklist before publishing a tagged GHCR release.
    - `sha-<commit>`.
 9. Smoke test a fresh Compose install with empty `data`, `reports`, `logs`, `transcode-staging`, and `transcode-backups` directories.
 10. Smoke test rollback instructions with the previously published tag when migrations changed.
+11. For retention changes, verify credentials are redacted in connection responses and diagnostics, then exercise a mocked or disposable Seerr/Arr/Plex analysis without deleting production media.
+12. Check the Retention page near 390px and 1440px widths with a long title, many requesters, a source warning, the detail drawer, transcode dialog, and guarded delete controls.

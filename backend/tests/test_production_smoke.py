@@ -33,6 +33,9 @@ class ProductionSmokeTest(unittest.TestCase):
             from app.services import scanner as scanner_module
             from app.services.transcodes import build_command, transcode_savings_stats
 
+            fresh_config = load_config()
+            for field_name in fresh_config.__dataclass_fields__:
+                object.__setattr__(CONFIG, field_name, getattr(fresh_config, field_name))
             db.init_db()
             self.assertTrue(db.migration_status()["ok"])
             self.assertIn("0001_initial_schema", db.migration_status()["applied"])
@@ -42,6 +45,7 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0005_transcode_run_cleanup_archive", db.migration_status()["applied"])
             self.assertIn("0006_transcode_savings", db.migration_status()["applied"])
             self.assertIn("0007_publish_validation_and_indexes", db.migration_status()["applied"])
+            self.assertIn("0008_media_retention_review", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
             with tempfile.TemporaryDirectory() as config_temp_dir:
                 config_env = {
@@ -295,6 +299,28 @@ class ProductionSmokeTest(unittest.TestCase):
                 self.assertEqual(auth.status_code, 200)
                 self.assertTrue(auth.json()["authenticated"])
 
+                retention_connection = client.post(
+                    "/api/retention/connections",
+                    json={
+                        "service_type": "radarr",
+                        "name": "Smoke Radarr",
+                        "server_url": "http://radarr.invalid",
+                        "api_key": "retention-smoke-secret",
+                        "seerr_service_id": 10,
+                        "path_mappings": [
+                            {"source_path_prefix": "/movies", "media_atlas_path_prefix": "/media/Movies"}
+                        ],
+                    },
+                )
+                self.assertEqual(retention_connection.status_code, 200)
+                self.assertNotIn("retention-smoke-secret", retention_connection.text)
+                retention_connection_id = retention_connection.json()["id"]
+                retention_connections = client.get("/api/retention/connections")
+                self.assertEqual(retention_connections.status_code, 200)
+                self.assertNotIn("retention-smoke-secret", retention_connections.text)
+                retention_export = client.get("/api/exports/retention-candidates.csv")
+                self.assertEqual(retention_export.status_code, 200)
+
                 admin_status = client.get("/api/admin/status")
                 self.assertEqual(admin_status.status_code, 200)
                 runtime_config = admin_status.json()["runtime_config"]
@@ -313,6 +339,9 @@ class ProductionSmokeTest(unittest.TestCase):
                 self.assertIn("runtime_config", diagnostics_body)
                 self.assertIn("version", diagnostics_body)
                 self.assertNotIn("MEDIA_ATLAS_PLEX_TOKEN", diagnostics.text)
+                self.assertNotIn("retention-smoke-secret", diagnostics.text)
+                self.assertIn("media_retention", diagnostics_body)
+                self.assertIn("retention_analyses", diagnostics_body["readiness"]["jobs"])
 
                 stats = client.get("/api/transcode-runs/stats")
                 self.assertEqual(stats.status_code, 200)
@@ -325,6 +354,9 @@ class ProductionSmokeTest(unittest.TestCase):
                 )
                 self.assertEqual(item_cleanup_response.status_code, 200)
                 self.assertEqual(item_cleanup_response.json()["cleanup_status"], "cleaned")
+
+                removed_connection = client.delete(f"/api/retention/connections/{retention_connection_id}")
+                self.assertEqual(removed_connection.status_code, 200)
 
 
 if __name__ == "__main__":

@@ -55,6 +55,27 @@ Take a database backup before upgrading when release notes mention migrations. A
    docker compose up -d --force-recreate
    ```
 
+Migration `0008_media_retention_review` only adds retention connection, job, candidate/file, Plex evidence, and remediation-audit tables. It does not rewrite existing media, Plex, scan, or transcode rows. SQLite migrations are forward-only; rolling back to an older image after `0008` should still use the pre-upgrade database backup so schema and application expectations remain aligned. Retention API keys saved through the UI live in SQLite, so protect database backups as secrets.
+
+## Retention Analysis Runbook
+
+Before the first analysis, confirm Plex is enabled and synced, one Seerr connection is enabled, and every Arr instance has the correct Seerr service ID and path mappings. Use the connection Test buttons in Settings.
+
+- Plex or Seerr failure fails the analysis and preserves the previous successful snapshot.
+- A single Arr failure completes with warnings and excludes that instance from the new snapshot. Old candidates from that instance do not carry forward.
+- Incomplete file mapping appears under mapping diagnostics and cannot be deleted. Correct the Arr-to-container or Plex-to-container mapping, sync Plex, and rerun analysis.
+- Scheduled analysis is disabled by default. When enabled, it runs once at the configured server-local time, never overlaps, and does not catch up after downtime.
+- A backend restart marks an active analysis interrupted. Retry it from Retention; partial snapshots are not published.
+
+## Retention Deletion Recovery
+
+Deletion always goes through the owning Sonarr/Radarr service after a fresh Plex sync and full source revalidation. Media Atlas does not need or use direct filesystem deletion for this workflow.
+
+- If revalidation reports new play evidence, changed files/sizes, changed eligibility, missing requests, or incomplete mapping, no deletion call is made. Run a new analysis before reconsidering the item.
+- If Arr deletion succeeds but Seerr status reconciliation fails, the audit record is `succeeded_with_warning`. Use **Retry Seerr** to repeat only the non-clearing `deleted` status update; do not delete the Arr title again.
+- If an Arr delete times out, Media Atlas queries the title. A confirmed missing title is treated as success; a confirmed present title is treated as failure. If the title state cannot be determined, the audit is `unknown` and automatic retry is blocked. Inspect Arr activity/history and the media path before taking any manual action.
+- Seerr request history is intentionally preserved. Never use Seerr Clear Data as part of recovery.
+
 ## Environment Value Not Reaching Container
 
 If Admin Status does not match `.env`, remember that Compose does not automatically inject every `.env` key. It only passes keys listed under `environment:`.

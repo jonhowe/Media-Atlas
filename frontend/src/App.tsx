@@ -11,6 +11,14 @@ import type {
   PlexSettings,
   PlexStatus,
   PlexSyncJob,
+  RetentionAction,
+  RetentionAnalysisJob,
+  RetentionCandidate,
+  RetentionCandidatePage,
+  RetentionConnection,
+  RetentionPathMapping,
+  RetentionSettings,
+  RetentionSummary,
   ScanJob,
   Summary,
   TranscodePlan,
@@ -26,6 +34,7 @@ type Page =
   | "directories"
   | "scans"
   | "library"
+  | "retention"
   | "candidates"
   | "reports"
   | "planner"
@@ -35,15 +44,23 @@ type Page =
 
 const nav: Array<[Page, string]> = [
   ["dashboard", "Dashboard"],
+  ["library", "Library"],
+  ["retention", "Retention"],
+  ["candidates", "Quality Candidates"],
+  ["runs", "Runs"],
   ["directories", "Directories"],
   ["scans", "Scans"],
-  ["library", "Library"],
-  ["candidates", "Candidates"],
   ["reports", "Reports"],
   ["planner", "Transcode Planner"],
-  ["runs", "Transcode Runs"],
   ["status", "Admin Status"],
   ["settings", "Settings"]
+];
+
+const mobileQuickNav: Array<[Page, string]> = [
+  ["dashboard", "Dashboard"],
+  ["library", "Library"],
+  ["retention", "Retention"],
+  ["runs", "Runs"]
 ];
 
 const FIRST_RUN_SETUP_KEY = "media-atlas:first-run-setup-dismissed";
@@ -234,6 +251,7 @@ export default function App() {
             {page === "directories" && <Directories onToast={setToast} />}
             {page === "scans" && <Scans onToast={setToast} />}
             {page === "library" && <Library onToast={setToast} />}
+            {page === "retention" && <Retention onToast={setToast} />}
             {page === "candidates" && <Candidates onToast={setToast} />}
             {page === "reports" && <Reports />}
             {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
@@ -244,7 +262,7 @@ export default function App() {
         )}
         {!showFirstRunSetup && (
           <nav className="mobileBottomNav" aria-label="Quick navigation">
-            {nav.slice(0, 5).map(([key, label]) => (
+            {mobileQuickNav.map(([key, label]) => (
               <button
                 key={key}
                 className={page === key ? "active" : ""}
@@ -452,6 +470,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [scans, setScans] = useState<ScanJob[]>([]);
   const [savings, setSavings] = useState<TranscodeSavingsStats | null>(null);
+  const [retention, setRetention] = useState<RetentionSummary | null>(null);
 
   useEffect(() => {
     refresh();
@@ -461,18 +480,20 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
 
   async function refresh() {
     try {
-      const [nextHealth, nextSummary, nextRuns, nextScans, nextSavings] = await Promise.all([
+      const [nextHealth, nextSummary, nextRuns, nextScans, nextSavings, nextRetention] = await Promise.all([
         api<Health>("/api/health"),
         api<Summary>("/api/reports/summary"),
         api<TranscodeRun[]>("/api/transcode-runs?limit=5&include_archived=true"),
         api<ScanJob[]>("/api/scans?limit=5"),
-        api<TranscodeSavingsStats>("/api/transcode-runs/stats")
+        api<TranscodeSavingsStats>("/api/transcode-runs/stats"),
+        api<RetentionSummary>("/api/retention/summary")
       ]);
       setHealth(nextHealth);
       setSummary(nextSummary);
       setRuns(nextRuns);
       setScans(nextScans);
       setSavings(nextSavings);
+      setRetention(nextRetention);
     } catch (error) {
       onToast(String(error));
     }
@@ -502,6 +523,19 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
         </Panel>
         <Panel title="Transcode Savings">
           <TranscodeSavingsPanel stats={savings} />
+        </Panel>
+        <Panel title="Retention Review">
+          <div className="statusGrid">
+            <div className="scanStats">
+              <span><strong>{retention?.candidate_count ?? 0}</strong> deletion candidates</span>
+              <span><strong>{retention?.diagnostic_count ?? 0}</strong> mapping diagnostics</span>
+              <span><strong>{formatBytes(retention?.total_size_bytes ?? 0)}</strong> reclaimable</span>
+              <span><strong>{retention?.latest_analysis?.warnings.length ?? 0}</strong> source warnings</span>
+            </div>
+            <span className="muted">
+              Latest analysis {formatDateTime(retention?.latest_analysis?.finished_at || retention?.latest_analysis?.created_at)}
+            </span>
+          </div>
         </Panel>
         <Panel title="Recent Transcode Runs">
           <RecentTranscodeRuns runs={runs} />
@@ -976,6 +1010,425 @@ function CandidateList({ category, onToast }: { category: string; onToast: (mess
       .catch((error) => onToast(String(error)));
   }, [category, onToast]);
   return <MediaTable files={files} onOpen={() => undefined} />;
+}
+
+function Retention({ onToast }: { onToast: (message: string) => void }) {
+  const [summary, setSummary] = useState<RetentionSummary | null>(null);
+  const [jobs, setJobs] = useState<RetentionAnalysisJob[]>([]);
+  const [candidates, setCandidates] = useState<RetentionCandidatePage | null>(null);
+  const [connections, setConnections] = useState<RetentionConnection[]>([]);
+  const [actions, setActions] = useState<RetentionAction[]>([]);
+  const [profiles, setProfiles] = useState<TranscodeProfile[]>([]);
+  const [status, setStatus] = useState("active");
+  const [mediaType, setMediaType] = useState("all");
+  const [connectionId, setConnectionId] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setCandidatePage] = useState(1);
+  const [selected, setSelected] = useState<RetentionCandidate | null>(null);
+  const [transcodeCandidate, setTranscodeCandidate] = useState<RetentionCandidate | null>(null);
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [status, mediaType, connectionId, query, page]);
+
+  async function refresh() {
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: "50",
+        status,
+        media_type: mediaType,
+        query
+      });
+      if (connectionId) params.set("connection_id", connectionId);
+      const [nextSummary, nextJobs, nextCandidates, nextConnections, nextActions, nextProfiles] = await Promise.all([
+        api<RetentionSummary>("/api/retention/summary"),
+        api<RetentionAnalysisJob[]>("/api/retention/analyses?limit=20"),
+        api<RetentionCandidatePage>(`/api/retention/candidates?${params}`),
+        api<RetentionConnection[]>("/api/retention/connections"),
+        api<RetentionAction[]>("/api/retention/actions?limit=50"),
+        api<TranscodeProfile[]>("/api/transcode-profiles")
+      ]);
+      setSummary(nextSummary);
+      setJobs(nextJobs);
+      setCandidates(nextCandidates);
+      setConnections(nextConnections);
+      setActions(nextActions);
+      setProfiles(nextProfiles);
+      if (selected) {
+        const nextSelected = await api<RetentionCandidate>(`/api/retention/candidates/${selected.id}`);
+        setSelected(nextSelected);
+      }
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function startAnalysis() {
+    try {
+      await api<RetentionAnalysisJob>("/api/retention/analyses", { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Retention analysis queued.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function cancelAnalysis(jobId: number) {
+    try {
+      await api(`/api/retention/analyses/${jobId}/cancel`, { method: "POST", body: "{}" });
+      await refresh();
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function retryAnalysis(jobId: number) {
+    try {
+      await api(`/api/retention/analyses/${jobId}/retry`, { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Retention analysis retry queued.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function openDetail(candidateId: number) {
+    try {
+      setSelected(await api<RetentionCandidate>(`/api/retention/candidates/${candidateId}`));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function openTranscode(candidate: RetentionCandidate) {
+    try {
+      const detail = candidate.files
+        ? candidate
+        : await api<RetentionCandidate>(`/api/retention/candidates/${candidate.id}`);
+      setTranscodeCandidate(detail);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function deleteCandidate(candidate: RetentionCandidate) {
+    if (!window.confirm(
+      `Delete the entire ${candidate.media_type === "tv" ? "series" : "movie"} copy from ${candidate.connection_name}? This removes managed files through ${candidate.service_type}.`
+    )) return;
+    const expected = `DELETE ${candidate.title}`;
+    const confirmation = window.prompt(`Type ${expected} to continue.`);
+    if (confirmation === null) return;
+    try {
+      await api(`/api/retention/candidates/${candidate.id}/delete`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: confirmation })
+      });
+      setSelected(null);
+      await refresh();
+      onToast("Deletion completed through the owning service.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function retrySeerr(actionId: number) {
+    try {
+      await api(`/api/retention/actions/${actionId}/retry-seerr`, { method: "POST", body: "{}" });
+      await refresh();
+      onToast("Seerr reconciliation completed.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  const latest = summary?.latest_analysis;
+  return (
+    <section className="stack">
+      <div className="metrics">
+        <Metric label="Deletion candidates" value={summary?.candidate_count ?? 0} />
+        <Metric label="Reclaimable" value={formatBytes(summary?.total_size_bytes ?? 0)} />
+        <Metric label="Mapping diagnostics" value={summary?.diagnostic_count ?? 0} />
+        <Metric label="Latest analysis" value={formatDateTime(latest?.finished_at || latest?.created_at)} />
+      </div>
+
+      {!summary?.configured && (
+        <Panel title="Retention setup required">
+          <p className="muted">Configure and enable one Seerr connection and at least one Sonarr or Radarr connection in Settings. Plex must also be enabled.</p>
+        </Panel>
+      )}
+
+      {latest?.warnings.length ? (
+        <Panel title="Source warnings">
+          <div className="warningList">
+            {latest.warnings.map((warning, index) => (
+              <div key={`${warning.source}-${index}`}>
+                <Badge tone="warn">{warning.source}</Badge> {warning.message}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel title="Latest run">
+        <div className="panelIntro">
+          <div className="statusGrid">
+            {latest ? (
+              <>
+                <div className="progressHeader">
+                  <StatusBadge status={latest.status} />
+                  <strong>{Math.round(latest.progress_percent || 0)}%</strong>
+                </div>
+                <Progress value={latest.progress_percent} />
+                <span className="muted">{latest.message || latest.error_message}</span>
+              </>
+            ) : <span className="muted">No retention analysis has run.</span>}
+          </div>
+          <div className="rowActions">
+            <button className="primary" disabled={Boolean(latest && ["queued", "running"].includes(latest.status))} onClick={startAnalysis}>Run analysis</button>
+            {latest && ["queued", "running"].includes(latest.status) && <button onClick={() => cancelAnalysis(latest.id)}>Cancel</button>}
+            {latest && ["failed", "canceled", "interrupted"].includes(latest.status) && <button onClick={() => retryAnalysis(latest.id)}>Retry</button>}
+            <a className="button" href={exportUrl("retention-candidates.csv")}>Export CSV</a>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Candidates">
+        <div className="toolbar retentionFilters">
+          <input value={query} onChange={(event) => { setCandidatePage(1); setQuery(event.target.value); }} placeholder="Search title" />
+          <select value={status} onChange={(event) => { setCandidatePage(1); setStatus(event.target.value); }}>
+            <option value="active">Deletion candidates</option>
+            <option value="diagnostic">Mapping diagnostics</option>
+            <option value="all">All results</option>
+          </select>
+          <select value={mediaType} onChange={(event) => { setCandidatePage(1); setMediaType(event.target.value); }}>
+            <option value="all">Movies and shows</option>
+            <option value="movie">Movies</option>
+            <option value="tv">Shows</option>
+          </select>
+          <select value={connectionId} onChange={(event) => { setCandidatePage(1); setConnectionId(event.target.value); }}>
+            <option value="">All instances</option>
+            {connections.filter((item) => item.service_type !== "seerr").map((connection) => (
+              <option key={connection.id} value={connection.id}>{connection.name}</option>
+            ))}
+          </select>
+        </div>
+        <table className="retentionCandidatesTable mobileStackTable">
+          <thead><tr><th>Title</th><th>Reason and requester</th><th>Storage</th><th>Eligibility</th><th>Coverage</th><th>Instance</th><th></th></tr></thead>
+          <tbody>
+            {candidates?.items.map((candidate) => (
+              <tr key={candidate.id}>
+                <td className="mobileStackPrimary">
+                  <strong>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</strong>
+                  <span className="muted">{candidate.media_type === "tv" ? "Whole series" : "Movie"}{candidate.is_4k ? " · 4K" : ""}</span>
+                </td>
+                <td>
+                  <span className="mobileCellLabel">Reason</span>
+                  <span>{candidate.reason}</span>
+                  <div className="muted">Requested by {candidate.requesters.join(", ")}</div>
+                </td>
+                <td><span className="mobileCellLabel">Storage</span><strong>{formatBytes(candidate.size_bytes)}</strong><div className="muted">{candidate.file_count} files</div></td>
+                <td><span className="mobileCellLabel">Eligibility</span>{eligibilityAgeDays(candidate.eligible_since)} days<div className="muted">Since {formatDateTime(candidate.eligible_since)}</div></td>
+                <td>
+                  <span className="mobileCellLabel">Coverage</span>
+                  <Badge tone={candidate.status === "active" ? "good" : "warn"}>{candidate.matched_file_count}/{candidate.file_count} mapped</Badge>
+                  <div className="muted">Zero qualifying plays</div>
+                </td>
+                <td><span className="mobileCellLabel">Instance</span>{candidate.connection_name}<div className="muted">{candidate.service_type}</div></td>
+                <td className="rowActions">
+                  <button onClick={() => openDetail(candidate.id)}>Details</button>
+                  {candidate.available_actions.includes("transcode_plan") && <button onClick={() => openTranscode(candidate)}>Transcode plan</button>}
+                  {candidate.available_actions.includes("delete") && <button className="danger" onClick={() => deleteCandidate(candidate)}>Delete</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!candidates?.items.length && <p className="muted">No candidates match these filters.</p>}
+        <Pager page={page} total={candidates?.total ?? 0} pageSize={50} onPage={setCandidatePage} />
+      </Panel>
+
+      <Panel title="Analysis history">
+        <table className="mobileStackTable retentionJobsTable">
+          <thead><tr><th>Run</th><th>Status</th><th>Results</th><th>Timing</th><th>Message</th><th></th></tr></thead>
+          <tbody>{jobs.map((job) => (
+            <tr key={job.id}>
+              <td className="mobileStackPrimary"><strong>#{job.id}</strong><div className="muted">{job.trigger_type}</div></td>
+              <td><span className="mobileCellLabel">Status</span><StatusBadge status={job.status} /></td>
+              <td><span className="mobileCellLabel">Results</span>{job.candidate_count} candidates · {formatBytes(job.total_size_bytes)}<div className="muted">{job.diagnostic_count} diagnostics · {job.warnings.length} warnings</div></td>
+              <td><span className="mobileCellLabel">Timing</span>{formatDateTime(job.created_at)}<div className="muted">Finished {formatDateTime(job.finished_at)}</div></td>
+              <td><span className="mobileCellLabel">Message</span>{job.error_message || job.message}</td>
+              <td className="rowActions">
+                {["queued", "running"].includes(job.status) && <button onClick={() => cancelAnalysis(job.id)}>Cancel</button>}
+                {["failed", "canceled", "interrupted"].includes(job.status) && <button onClick={() => retryAnalysis(job.id)}>Retry</button>}
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </Panel>
+
+      <Panel title="Action history">
+        <table className="mobileStackTable retentionActionsTable">
+          <thead><tr><th>Media</th><th>Action</th><th>Status</th><th>Requested by</th><th>Time</th><th></th></tr></thead>
+          <tbody>{actions.map((action) => (
+            <tr key={action.id}>
+              <td className="mobileStackPrimary"><strong>{action.title}</strong><div className="muted">{action.connection_name}</div></td>
+              <td><span className="mobileCellLabel">Action</span>{formatStatusLabel(action.action_type)}</td>
+              <td><span className="mobileCellLabel">Status</span><StatusBadge status={action.status} />{action.error_message && <div className="muted">{action.error_message}</div>}</td>
+              <td><span className="mobileCellLabel">Requested by</span>{action.requested_by || "local"}</td>
+              <td><span className="mobileCellLabel">Time</span>{formatDateTime(action.finished_at || action.created_at)}</td>
+              <td>{action.action_type === "delete" && action.status === "succeeded_with_warning" && <button onClick={() => retrySeerr(action.id)}>Retry Seerr</button>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {!actions.length && <p className="muted">No retention actions have been taken.</p>}
+      </Panel>
+
+      {selected && (
+        <RetentionDetailDrawer
+          candidate={selected}
+          onClose={() => setSelected(null)}
+          onTranscode={openTranscode}
+          onDelete={deleteCandidate}
+        />
+      )}
+      {transcodeCandidate && (
+        <RetentionTranscodeDialog
+          candidate={transcodeCandidate}
+          profiles={profiles}
+          onClose={() => setTranscodeCandidate(null)}
+          onCreated={async (planId) => {
+            setTranscodeCandidate(null);
+            await refresh();
+            onToast(`Created transcode plan ${planId}. No transcode was started.`);
+          }}
+          onToast={onToast}
+        />
+      )}
+    </section>
+  );
+}
+
+function RetentionDetailDrawer({
+  candidate,
+  onClose,
+  onTranscode,
+  onDelete
+}: {
+  candidate: RetentionCandidate;
+  onClose: () => void;
+  onTranscode: (candidate: RetentionCandidate) => void;
+  onDelete: (candidate: RetentionCandidate) => void;
+}) {
+  return (
+    <div className="drawerBackdrop" onClick={onClose}>
+      <aside className="drawer" onClick={(event) => event.stopPropagation()}>
+        <div className="drawerHeader">
+          <div><h2>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</h2><p className="muted">{candidate.connection_name} · {candidate.media_type === "tv" ? "whole series" : "movie"}</p></div>
+          <button onClick={onClose}>Close</button>
+        </div>
+        <div className="metrics compact">
+          <Metric label="Exact disk size" value={formatBytes(candidate.size_bytes)} />
+          <Metric label="Eligibility age" value={`${eligibilityAgeDays(candidate.eligible_since)} days`} />
+          <Metric label="Managed files" value={candidate.file_count} />
+          <Metric label="Plex coverage" value={`${candidate.matched_file_count}/${candidate.file_count}`} />
+        </div>
+        <Panel title="Decision evidence">
+          <div className="statusGrid">
+            <p>{candidate.reason}</p>
+            <div><strong>Requesters</strong><p>{candidate.requesters.join(", ")}</p></div>
+            <div><strong>Eligibility date</strong><p>{formatDateTime(candidate.eligible_since)}</p></div>
+            <div><strong>Play evidence</strong><p>No mapped Plex item has a play or last-viewed timestamp at or after the eligibility date.</p></div>
+          </div>
+        </Panel>
+        <Panel title="Managed files">
+          <div className="retentionFileList">
+            {candidate.files?.map((file) => (
+              <div key={file.id}>
+                <div><strong>{file.filename || file.path.split("/").pop()}</strong><div className="path">{file.path}</div></div>
+                <div><Badge tone={file.match_status === "matched" ? "good" : "warn"}>{file.match_status}</Badge><div>{formatBytes(file.size_bytes)}</div></div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="Request history">
+          <div className="compactList">
+            {candidate.requests.map((request, index) => (
+              <div key={`${request.id}-${index}`}><strong>{request.requester}</strong><span>{formatDateTime(request.created_at)}{request.is_4k ? " · 4K" : ""}</span></div>
+            ))}
+          </div>
+        </Panel>
+        <div className="rowActions retentionDrawerActions">
+          {candidate.available_actions.includes("transcode_plan") && <button className="primary" onClick={() => onTranscode(candidate)}>Create transcode plan</button>}
+          {candidate.available_actions.includes("delete") && <button className="danger" onClick={() => onDelete(candidate)}>Delete through {candidate.service_type}</button>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function RetentionTranscodeDialog({
+  candidate,
+  profiles,
+  onClose,
+  onCreated,
+  onToast
+}: {
+  candidate: RetentionCandidate;
+  profiles: TranscodeProfile[];
+  onClose: () => void;
+  onCreated: (planId: number) => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const eligibleFiles = (candidate.files || []).filter((file) => file.media_atlas_file_id);
+  const preferred = eligibleFiles.filter((file) => ["Easy Win", "Remux Only", "Review"].includes(file.recommendation_category || ""));
+  const [profileId, setProfileId] = useState(defaultProfileId(profiles));
+  const [name, setName] = useState(`Retention review: ${candidate.title}`);
+  const [selectedFiles, setSelectedFiles] = useState<Set<number>>(
+    new Set((preferred.length ? preferred : eligibleFiles).map((file) => Number(file.media_atlas_file_id)))
+  );
+
+  function toggle(fileId: number) {
+    const next = new Set(selectedFiles);
+    next.has(fileId) ? next.delete(fileId) : next.add(fileId);
+    setSelectedFiles(next);
+  }
+
+  async function submit() {
+    try {
+      const result = await api<{ plan: TranscodePlan }>(`/api/retention/candidates/${candidate.id}/transcode-plan`, {
+        method: "POST",
+        body: JSON.stringify({ profile_id: profileId, name, file_ids: Array.from(selectedFiles) })
+      });
+      await onCreated(result.plan.id);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  return (
+    <div className="dialogBackdrop" onClick={onClose}>
+      <section className="dialogPanel" role="dialog" aria-modal="true" aria-labelledby="retention-transcode-title" onClick={(event) => event.stopPropagation()}>
+        <div className="drawerHeader"><div><h2 id="retention-transcode-title">Create transcode plan</h2><p className="muted">{candidate.title} · creating this plan does not start a transcode.</p></div><button onClick={onClose}>Close</button></div>
+        <div className="formGrid retentionTranscodeForm">
+          <label>Plan name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Profile<select value={profileId} onChange={(event) => setProfileId(Number(event.target.value))}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+        </div>
+        <div className="checkList retentionTranscodeFiles">
+          {eligibleFiles.map((file) => (
+            <label className="checkRow" key={file.id}>
+              <input type="checkbox" checked={selectedFiles.has(Number(file.media_atlas_file_id))} onChange={() => toggle(Number(file.media_atlas_file_id))} />
+              <span><strong>{file.filename || file.path}</strong><span className="muted">{file.recommendation_category || "Uncategorized"} · {formatBytes(file.size_bytes)}</span></span>
+            </label>
+          ))}
+        </div>
+        {!eligibleFiles.length && <p className="muted">No files in this candidate are matched to Media Atlas inventory, so a plan cannot be created.</p>}
+        <div className="rowActions"><button className="primary" disabled={!profileId || !selectedFiles.size} onClick={submit}>Create plan</button><button onClick={onClose}>Cancel</button></div>
+      </section>
+    </div>
+  );
 }
 
 function Reports() {
@@ -2117,10 +2570,213 @@ function Settings({ onToast }: { onToast: (message: string) => void }) {
           </tbody>
         </table>
       </Panel>
+      <RetentionSettingsPanel onToast={onToast} />
       <Panel title="Runtime Settings">
         <pre className="json">{JSON.stringify(settings, null, 2)}</pre>
       </Panel>
     </section>
+  );
+}
+
+function RetentionSettingsPanel({ onToast }: { onToast: (message: string) => void }) {
+  const [retentionSettings, setRetentionSettings] = useState<RetentionSettings | null>(null);
+  const [connections, setConnections] = useState<RetentionConnection[]>([]);
+  const [serviceType, setServiceType] = useState<"seerr" | "sonarr" | "radarr">("radarr");
+  const [name, setName] = useState("Radarr");
+  const [serverUrl, setServerUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [seerrServiceId, setSeerrServiceId] = useState("");
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function refresh() {
+    try {
+      const [nextSettings, nextConnections] = await Promise.all([
+        api<RetentionSettings>("/api/retention/settings"),
+        api<RetentionConnection[]>("/api/retention/connections")
+      ]);
+      setRetentionSettings(nextSettings);
+      setConnections(nextConnections);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function saveSettings() {
+    if (!retentionSettings) return;
+    try {
+      setRetentionSettings(await api<RetentionSettings>("/api/retention/settings", {
+        method: "PUT",
+        body: JSON.stringify(retentionSettings)
+      }));
+      onToast("Retention settings saved.");
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function addConnection() {
+    try {
+      await api<RetentionConnection>("/api/retention/connections", {
+        method: "POST",
+        body: JSON.stringify({
+          service_type: serviceType,
+          name,
+          server_url: serverUrl,
+          api_key: apiKey,
+          enabled: true,
+          seerr_service_id: seerrServiceId ? Number(seerrServiceId) : null,
+          path_mappings: []
+        })
+      });
+      setServerUrl("");
+      setApiKey("");
+      setSeerrServiceId("");
+      await refresh();
+      onToast(`${name} connection added.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  function changeService(value: "seerr" | "sonarr" | "radarr") {
+    setServiceType(value);
+    setName(value === "seerr" ? "Seerr" : value === "sonarr" ? "Sonarr" : "Radarr");
+  }
+
+  return (
+    <Panel title="Media retention review">
+      <div className="stack retentionSettings">
+        <p className="muted">Retention analysis uses direct REST APIs. API keys are write-only after saving. Add the Seerr service ID to each Arr connection so standard and 4K copies map to the correct instance.</p>
+        {retentionSettings && (
+          <div className="formGrid retentionScheduleGrid">
+            <label>Minimum unwatched days<input type="number" min="1" max="3650" value={retentionSettings.minimum_unwatched_days} onChange={(event) => setRetentionSettings({ ...retentionSettings, minimum_unwatched_days: Number(event.target.value) || 90 })} /></label>
+            <label>Daily schedule<select value={retentionSettings.schedule_enabled ? "true" : "false"} onChange={(event) => setRetentionSettings({ ...retentionSettings, schedule_enabled: event.target.value === "true" })}><option value="false">Disabled</option><option value="true">Enabled</option></select></label>
+            <label>Server-local time<input type="time" value={retentionSettings.schedule_time} onChange={(event) => setRetentionSettings({ ...retentionSettings, schedule_time: event.target.value })} /></label>
+            <label>API timeout seconds<input type="number" min="1" max="120" value={retentionSettings.timeout_seconds} onChange={(event) => setRetentionSettings({ ...retentionSettings, timeout_seconds: Number(event.target.value) || 20 })} /></label>
+            <button className="primary" onClick={saveSettings}>Save schedule</button>
+          </div>
+        )}
+        <div>
+          <h3>Connections</h3>
+          <div className="retentionConnectionList">
+            {connections.map((connection) => (
+              <RetentionConnectionEditor key={`${connection.id}-${connection.updated_at}`} connection={connection} onChanged={refresh} onToast={onToast} />
+            ))}
+            {!connections.length && <p className="muted">No retention sources configured.</p>}
+          </div>
+        </div>
+        <div>
+          <h3>Add connection</h3>
+          <div className="formGrid retentionConnectionForm">
+            <label>Service<select value={serviceType} onChange={(event) => changeService(event.target.value as "seerr" | "sonarr" | "radarr")}><option value="seerr">Seerr</option><option value="sonarr">Sonarr</option><option value="radarr">Radarr</option></select></label>
+            <label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
+            <label>Server URL<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="http://service:port" /></label>
+            <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
+            {serviceType !== "seerr" && <label>Seerr service ID<input type="number" value={seerrServiceId} onChange={(event) => setSeerrServiceId(event.target.value)} placeholder="Required for multiple instances" /></label>}
+            <button className="primary" disabled={!name || !serverUrl || !apiKey} onClick={addConnection}>Add connection</button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function RetentionConnectionEditor({
+  connection,
+  onChanged,
+  onToast
+}: {
+  connection: RetentionConnection;
+  onChanged: () => Promise<void>;
+  onToast: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState(connection);
+  const [apiKey, setApiKey] = useState("");
+
+  function update(next: Partial<RetentionConnection>) {
+    setDraft((current) => ({ ...current, ...next }));
+  }
+
+  function updateMapping(index: number, key: keyof RetentionPathMapping, value: string) {
+    const mappings = [...draft.path_mappings];
+    mappings[index] = { ...mappings[index], [key]: value };
+    update({ path_mappings: mappings });
+  }
+
+  async function save() {
+    try {
+      const payload: Record<string, unknown> = {
+        name: draft.name,
+        server_url: draft.server_url,
+        enabled: draft.enabled,
+        seerr_service_id: draft.seerr_service_id,
+        path_mappings: draft.path_mappings
+      };
+      if (apiKey) payload.api_key = apiKey;
+      await api(`/api/retention/connections/${connection.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      setApiKey("");
+      await onChanged();
+      onToast(`${draft.name} saved.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function test() {
+    try {
+      if (apiKey) await save();
+      const result = await api<{ version?: string | null }>(`/api/retention/connections/${connection.id}/test`, { method: "POST", body: "{}" });
+      onToast(`Connected to ${draft.name}${result.version ? ` ${result.version}` : ""}.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Remove ${draft.name}? Connections with analysis history must be disabled instead.`)) return;
+    try {
+      await api(`/api/retention/connections/${connection.id}`, { method: "DELETE" });
+      await onChanged();
+      onToast(`${draft.name} removed.`);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  return (
+    <div className="retentionConnectionCard">
+      <div className="panelIntro">
+        <div><strong>{draft.name}</strong> <Badge tone={draft.enabled ? "good" : "muted"}>{draft.service_type}</Badge></div>
+        <span className="muted">API key {draft.api_key_configured ? draft.api_key_hint : "not configured"}</span>
+      </div>
+      <div className="formGrid retentionConnectionEditGrid">
+        <label>Name<input value={draft.name} onChange={(event) => update({ name: event.target.value })} /></label>
+        <label>Server URL<input value={draft.server_url} onChange={(event) => update({ server_url: event.target.value })} /></label>
+        <label>Enabled<select value={draft.enabled ? "true" : "false"} onChange={(event) => update({ enabled: event.target.value === "true" })}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        {draft.service_type !== "seerr" && <label>Seerr service ID<input type="number" value={draft.seerr_service_id ?? ""} onChange={(event) => update({ seerr_service_id: event.target.value ? Number(event.target.value) : null })} /></label>}
+        <label>Replace API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Leave blank to keep current key" /></label>
+      </div>
+      {draft.service_type !== "seerr" && (
+        <div>
+          <strong>Service path mappings</strong>
+          <p className="muted">Map paths reported by this Arr instance into the Media Atlas/Plex normalized path namespace.</p>
+          <div className="mappingList">
+            {draft.path_mappings.map((mapping, index) => (
+              <div className="mappingRow" key={index}>
+                <input value={mapping.source_path_prefix} onChange={(event) => updateMapping(index, "source_path_prefix", event.target.value)} placeholder="/arr/media" />
+                <input value={mapping.media_atlas_path_prefix} onChange={(event) => updateMapping(index, "media_atlas_path_prefix", event.target.value)} placeholder="/media" />
+                <button className="danger" onClick={() => update({ path_mappings: draft.path_mappings.filter((_, current) => current !== index) })}>Remove</button>
+              </div>
+            ))}
+            <button onClick={() => update({ path_mappings: [...draft.path_mappings, { source_path_prefix: "", media_atlas_path_prefix: "/media" }] })}>Add mapping</button>
+          </div>
+        </div>
+      )}
+      <div className="rowActions"><button className="primary" onClick={save}>Save</button><button onClick={test}>Test</button><button className="danger" onClick={remove}>Remove</button></div>
+    </div>
   );
 }
 
@@ -2333,7 +2989,7 @@ function Badge({ tone = "muted", children }: { tone?: string; children: ReactNod
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const tone = ["succeeded", "verified", "ok", "published", "cleaned"].includes(status)
+  const tone = ["succeeded", "succeeded_with_warnings", "succeeded_with_warning", "verified", "ok", "published", "cleaned"].includes(status)
     ? "good"
     : ["failed", "error", "verification_failed"].includes(status)
       ? "bad"
@@ -2342,7 +2998,7 @@ function StatusBadge({ status }: { status: string }) {
         : ["interrupted", "degraded"].includes(status)
           ? "warn"
           : "muted";
-  return <Badge tone={tone}>{status}</Badge>;
+  return <Badge tone={tone}>{formatStatusLabel(status)}</Badge>;
 }
 
 function Progress({ value }: { value: number }) {
@@ -2447,6 +3103,12 @@ function formatDateTime(value?: string | null) {
     hour: "numeric",
     minute: "2-digit"
   });
+}
+
+function eligibilityAgeDays(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return 0;
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
 }
 
 function formatNullableDateTime(value?: string | null) {
