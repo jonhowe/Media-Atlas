@@ -22,7 +22,7 @@ Release Automator is installed through these manual GitHub Actions workflows:
 - `release-automator-resume.yml` resumes a failed approved run without repeating completed work.
 
 The workflows pin `jonhowe/Release-Automator` to the immutable commit for Marketplace release
-`v0.4.0`. Repository policy is defined in `release-automator.toml`.
+`v0.4.1`. Repository policy is defined in `release-automator.toml`.
 
 ### Required repository setup
 
