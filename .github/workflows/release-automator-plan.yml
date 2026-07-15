@@ -107,7 +107,7 @@ jobs:
 
       - name: Create and print the frozen plan
         id: plan
-        uses: jonhowe/Release-Automator@a355ea4dba071c2b86bd67c2e7b52cfc28ad12a7 # v0.4.0
+        uses: jonhowe/Release-Automator@00faa60050ce9b6ef39bbd8bdd68180f1309822c # v0.4.1
         with:
           mode: plan
           repo-path: target
