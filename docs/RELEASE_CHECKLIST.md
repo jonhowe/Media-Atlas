@@ -34,3 +34,5 @@ Use this checklist before publishing a tagged GHCR release.
 10. Smoke test rollback instructions with the previously published tag when migrations changed.
 11. For retention changes, verify credentials are redacted in connection responses and diagnostics, then exercise a mocked or disposable Seerr/Arr/Plex analysis without deleting production media.
 12. Check the Retention page near 390px and 1440px widths with a long title, many requesters, a source warning, the detail drawer, transcode dialog, and guarded delete controls.
+13. Check the Logs page near 390px and 1440px widths with application filters, a running transcode item, a completed item, and a scan containing `ffprobe` stderr.
+14. Check the Transcode Planner near 390px and 1440px widths for each actionable category, category-switch confirmation, profile suggestions/overrides, search, paging, and review-only plan state.

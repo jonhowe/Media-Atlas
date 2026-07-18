@@ -44,6 +44,12 @@ docker compose up -d
 
 Take a database backup before upgrading when release notes mention migrations. After the upgrade, check Admin Status readiness and download diagnostics if anything is degraded.
 
+## Log Viewer And Retention
+
+Use the Logs page for filtered application events, live FFmpeg output, and stored scan errors. Application events remain available through `docker compose logs` and are also persisted under `./logs/application/media-atlas.jsonl`. The active file rotates at UTC midnight; rotated files use the same base name with a date suffix.
+
+`MEDIA_ATLAS_LOG_RETENTION_DAYS` applies to rotated application files and transcode logs when startup or manual housekeeping runs. A value of `0` disables log deletion. The active application file is excluded from cleanup even if its timestamp is old. If the UI cannot read logs, verify the `./logs:/app/logs` bind mount is writable, then check Admin Status storage readiness.
+
 ## Rollback
 
 1. Set `MEDIA_ATLAS_IMAGE` in `.env` to the previous known-good release tag.

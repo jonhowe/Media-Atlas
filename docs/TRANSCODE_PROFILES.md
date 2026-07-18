@@ -2,6 +2,8 @@
 
 Media Atlas generates only app-defined `ffmpeg` commands. Users can choose from seeded profiles when creating a transcode plan. Outputs are staged under the configured transcode staging directory; source media is not replaced or deleted.
 
+The planner exposes Easy Win, Remux Only, and Review media as separate categories so a plan never silently mixes incompatible intent. It suggests HEVC Archive Fast, Remux to MKV, and Manual Review Only respectively. Suggestions can be overridden with an inline warning; a Manual Review Only plan has no runnable items and cannot start a transcode run.
+
 ## Available Profiles
 
 | Profile | Command family | Relative speed | Use case |

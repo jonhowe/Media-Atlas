@@ -29,13 +29,16 @@ class ProductionSmokeTest(unittest.TestCase):
 
             from app import db
             from app.config import CONFIG, load_config
-            from app.main import app, scan_manager, transcode_manager
-            from app.services import scanner as scanner_module
-            from app.services.transcodes import build_command, transcode_savings_stats
 
             fresh_config = load_config()
             for field_name in fresh_config.__dataclass_fields__:
                 object.__setattr__(CONFIG, field_name, getattr(fresh_config, field_name))
+
+            from app.logging_config import application_log_path
+            from app.main import app, scan_manager, transcode_manager
+            from app.services import scanner as scanner_module
+            from app.services.transcodes import build_command, create_plan, transcode_savings_stats
+
             db.init_db()
             self.assertTrue(db.migration_status()["ok"])
             self.assertIn("0001_initial_schema", db.migration_status()["applied"])
@@ -93,6 +96,20 @@ class ProductionSmokeTest(unittest.TestCase):
                     "-c:a",
                     "copy",
                     "-c:s",
+                    "copy",
+                    "/target.mkv",
+                ],
+            )
+            self.assertEqual(
+                build_command({"command_template": "remux_mkv"}, "/source.ts", "/target.mkv"),
+                [
+                    "ffmpeg",
+                    "-n",
+                    "-i",
+                    "/source.ts",
+                    "-map",
+                    "0",
+                    "-c",
                     "copy",
                     "/target.mkv",
                 ],
@@ -290,7 +307,48 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIsNone(partial_bulk_cleanup["archived_at"])
             self.assertFalse(partial_bulk_cleanup["cleanup_summary"]["run_archived"])
 
+            root_id = db.query_one("SELECT id FROM media_roots ORDER BY id LIMIT 1")["id"]
+            planning_file_id = db.execute(
+                """
+                INSERT INTO files (
+                    root_id, path, directory, filename, extension, size_bytes,
+                    modified_time_ns, first_seen_at, last_seen_at, updated_at,
+                    recommendation_category, recommendation_summary,
+                    recommendation_reasons_json, recommendation_warnings_json
+                )
+                VALUES (?, ?, ?, ?, '.mkv', 100, 1, ?, ?, ?, 'Review', ?, '[]', '[]')
+                """,
+                (
+                    root_id,
+                    str(source_path),
+                    str(source_path.parent),
+                    source_path.name,
+                    now,
+                    now,
+                    now,
+                    "Complex media should be reviewed before conversion.",
+                ),
+            )
+            manual_profile_id = db.query_one(
+                "SELECT id FROM transcode_profiles WHERE command_template = 'manual_review'"
+            )["id"]
+            review_plan = create_plan("Review-only plan", manual_profile_id, [planning_file_id])
+
+            active_app_log = application_log_path(CONFIG.logs_dir)
+            active_app_log.parent.mkdir(parents=True, exist_ok=True)
+            active_app_log.write_text(
+                '{"timestamp":"2026-07-18T10:00:00+00:00","level":"info","logger":"media_atlas.smoke","message":"retained active log"}\n',
+                encoding="utf-8",
+            )
+            expired_rotated_log = active_app_log.with_name(f"{active_app_log.name}.2020-01-01")
+            expired_rotated_log.write_text("expired\n", encoding="utf-8")
+            expired_time = time.time() - (40 * 24 * 60 * 60)
+            os.utime(active_app_log, (expired_time, expired_time))
+            os.utime(expired_rotated_log, (expired_time, expired_time))
+
             with TestClient(app) as client:
+                self.assertTrue(active_app_log.exists())
+                self.assertFalse(expired_rotated_log.exists())
                 live = client.get("/api/health/live")
                 self.assertEqual(live.status_code, 200)
                 self.assertEqual(live.json()["status"], "alive")
@@ -298,6 +356,32 @@ class ProductionSmokeTest(unittest.TestCase):
                 auth = client.get("/api/auth/me")
                 self.assertEqual(auth.status_code, 200)
                 self.assertTrue(auth.json()["authenticated"])
+
+                application_logs = client.get("/api/logs/application", params={"logger": "media_atlas", "limit": 50})
+                self.assertEqual(application_logs.status_code, 200)
+                self.assertTrue(application_logs.json()["items"])
+                self.assertTrue(all("message" in item for item in application_logs.json()["items"]))
+                successful_poll_logs = client.get(
+                    "/api/logs/application",
+                    params={"logger": "media_atlas.requests", "query": "/api/logs/application"},
+                )
+                self.assertEqual(successful_poll_logs.json()["items"], [])
+                failed_poll = client.get("/api/logs/application", params={"limit": 501})
+                self.assertEqual(failed_poll.status_code, 422)
+                failed_poll_logs = client.get(
+                    "/api/logs/application",
+                    params={"logger": "media_atlas.requests", "query": "/api/logs/application"},
+                )
+                self.assertTrue(
+                    any(item.get("status_code") == 422 for item in failed_poll_logs.json()["items"]),
+                    failed_poll_logs.json(),
+                )
+
+                plans = client.get("/api/transcode-plans")
+                self.assertEqual(plans.status_code, 200)
+                review_plan_summary = next(item for item in plans.json() if item["id"] == review_plan["id"])
+                self.assertEqual(review_plan_summary["item_count"], 1)
+                self.assertEqual(review_plan_summary["runnable_item_count"], 0)
 
                 retention_connection = client.post(
                     "/api/retention/connections",

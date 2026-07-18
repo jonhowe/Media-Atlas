@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from . import db
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
 from .health import admin_status, diagnostics_status, live_status, metrics_status, readiness_status
-from .logging_config import configure_logging
+from .logging_config import configure_logging, read_application_logs
 from .security import (
     authenticated_user,
     auth_status,
@@ -210,16 +210,17 @@ async def request_security_middleware(request: Request, call_next: Any) -> Respo
         response = await call_next(request)
     security_headers(response)
     response.headers["X-Request-ID"] = request_id
-    logger.info(
-        "request complete",
-        extra={
-            "request_id": request_id,
-            "method": request.method,
-            "path": request.url.path,
-            "status_code": response.status_code,
-            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-        },
-    )
+    if request.url.path != "/api/logs/application" or response.status_code >= 400:
+        logger.info(
+            "request complete",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
     return response
 
 
@@ -233,6 +234,24 @@ async def startup() -> None:
     await plex_manager.recover_startup_jobs()
     await media_retention_manager.recover_startup_jobs()
     await transcode_manager.recover_startup_jobs()
+    logging.getLogger("media_atlas.startup").info("Media Atlas startup complete")
+
+
+@app.get("/api/logs/application")
+async def application_logs(
+    limit: int = Query(default=200, ge=1, le=500),
+    level: Literal["debug", "info", "warning", "error", "critical"] | None = None,
+    logger_prefix: str | None = Query(default=None, alias="logger", max_length=160),
+    query: str | None = Query(default=None, max_length=240),
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        read_application_logs,
+        CONFIG.logs_dir,
+        limit=limit,
+        level=level,
+        logger_prefix=logger_prefix,
+        query=query,
+    )
 
 
 @app.get("/api/health")
@@ -986,6 +1005,7 @@ async def list_transcode_plans(include_archived: bool = False) -> list[dict[str,
         f"""
         SELECT tp.*, p.name AS profile_name,
                (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id) AS item_count,
+               (SELECT COUNT(*) FROM transcode_plan_items WHERE plan_id = tp.id AND command_json IS NOT NULL) AS runnable_item_count,
                (SELECT COUNT(*) FROM transcode_runs WHERE plan_id = tp.id) AS run_count
         FROM transcode_plans tp
         LEFT JOIN transcode_profiles p ON p.id = tp.profile_id

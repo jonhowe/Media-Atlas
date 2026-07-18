@@ -17,7 +17,9 @@ Media Atlas stages transcode output separately from originals by default. Replac
 - Browse, search, filter, report, and export inventory data.
 - Classify files as Easy Win, Remux Only, Review, Skip, Already Modern, Error, or Missing.
 - Generate staged transcode plans from candidates.
+- Plan Easy Win, Remux Only, and Review files from one searchable, paginated workflow with profile guidance.
 - Start and monitor one server-side transcode run at a time.
+- Inspect persisted application logs, live transcode output, and scan errors from the Logs page.
 - Close and reopen the browser while jobs continue, as long as the backend process remains running.
 - Manually publish verified staged outputs back to the original path after two confirmations.
 
@@ -181,6 +183,16 @@ Source media is mounted read-only in the default Compose file. Staged transcode 
 
 See [Deployment Guide](docs/DEPLOYMENT.md) for known-good Compose usage and optional overrides for writable publish mode, Intel VAAPI, NVIDIA NVENC, and reverse proxy auth.
 
+## Logs
+
+The Logs page provides three authenticated views:
+
+- **Application** tails structured application events with level, logger-prefix, and text filters. These JSONL events are also written to stdout for `docker compose logs`.
+- **Transcodes** follows the latest FFmpeg output for a selected run item. Log actions on Transcode Runs open the corresponding item directly.
+- **Scans** shows current scan state plus stored paths, messages, exit codes, and `ffprobe` stderr for failed files.
+
+Application logs are written under `./logs/application` in a standard Compose install and rotate daily at UTC midnight. Rotated application logs and transcode logs are removed by the existing `MEDIA_ATLAS_LOG_RETENTION_DAYS` housekeeping setting; the active application log is never removed while Media Atlas is using it.
+
 ## Publishing Transcoded Outputs
 
 Completed transcode items can be published from Transcode Runs when the item succeeded and output verification passed. Publishing copies the staged output over the original source path after moving the original file into transcode backup storage.
@@ -222,6 +234,8 @@ Deletion is always one candidate at a time. The UI asks for confirmation and exa
 ## Transcode Profiles
 
 Media Atlas includes remux, software HEVC, hardware HEVC, H.264 compatibility, and manual-review profiles. `HEVC Archive Fast` is the recommended default software encode profile; hardware profiles require host/container device support.
+
+The planner supports one recommendation category per plan. It suggests `HEVC Archive Fast` for Easy Win, `Remux to MKV` for Remux Only, and `Manual Review Only` for Review. You can deliberately override a suggestion after reading the inline compatibility warning. Review-only plans contain no runnable commands and remain useful as tracking plans.
 
 See [Transcode Profiles](docs/TRANSCODE_PROFILES.md) for the full profile table, GPU/VAAPI Compose snippets, CPU checks, and x265 tuning notes.
 

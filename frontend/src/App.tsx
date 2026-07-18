@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, apiText, exportUrl, setCsrfToken } from "./api";
 import type {
   AdminStatus,
+  ApplicationLogEntry,
+  ApplicationLogPage,
   AuthStatus,
   Health,
   MediaFile,
@@ -39,8 +41,22 @@ type Page =
   | "reports"
   | "planner"
   | "runs"
+  | "logs"
   | "status"
   | "settings";
+
+type PlannerCategory = "Easy Win" | "Remux Only" | "Review";
+type CandidateCategory = PlannerCategory | "Already Modern" | "Error";
+type LogTab = "application" | "transcodes" | "scans";
+type LogTarget = {
+  tab: LogTab;
+  runId?: number;
+  itemId?: number;
+  scanId?: number;
+};
+
+const plannerCategories: PlannerCategory[] = ["Easy Win", "Remux Only", "Review"];
+const candidateCategories: CandidateCategory[] = [...plannerCategories, "Already Modern", "Error"];
 
 const nav: Array<[Page, string]> = [
   ["dashboard", "Dashboard"],
@@ -52,6 +68,7 @@ const nav: Array<[Page, string]> = [
   ["scans", "Scans"],
   ["reports", "Reports"],
   ["planner", "Transcode Planner"],
+  ["logs", "Logs"],
   ["status", "Admin Status"],
   ["settings", "Settings"]
 ];
@@ -101,6 +118,8 @@ export default function App() {
   const [showFirstRunSetup, setShowFirstRunSetup] = useState(false);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [plannerCategory, setPlannerCategory] = useState<PlannerCategory>("Easy Win");
+  const [logTarget, setLogTarget] = useState<LogTarget>({ tab: "application" });
 
   useEffect(() => {
     refreshAuth();
@@ -165,6 +184,16 @@ export default function App() {
   function changePage(nextPage: Page) {
     setPage(nextPage);
     setMobileNavOpen(false);
+  }
+
+  function openPlanner(category: PlannerCategory) {
+    setPlannerCategory(category);
+    changePage("planner");
+  }
+
+  function openLogs(target: LogTarget) {
+    setLogTarget(target);
+    changePage("logs");
   }
 
   const currentPageLabel = showFirstRunSetup ? "First-run setup" : nav.find(([key]) => key === page)?.[1];
@@ -249,13 +278,14 @@ export default function App() {
           <>
             {page === "dashboard" && <Dashboard onToast={setToast} />}
             {page === "directories" && <Directories onToast={setToast} />}
-            {page === "scans" && <Scans onToast={setToast} />}
+            {page === "scans" && <Scans onToast={setToast} onOpenLog={(scanId) => openLogs({ tab: "scans", scanId })} />}
             {page === "library" && <Library onToast={setToast} />}
             {page === "retention" && <Retention onToast={setToast} />}
-            {page === "candidates" && <Candidates onToast={setToast} />}
+            {page === "candidates" && <Candidates onToast={setToast} onPlanCategory={openPlanner} />}
             {page === "reports" && <Reports />}
-            {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} />}
-            {page === "runs" && <Runs onToast={setToast} />}
+            {page === "planner" && <Planner onToast={setToast} switchToRuns={() => setPage("runs")} initialCategory={plannerCategory} />}
+            {page === "runs" && <Runs onToast={setToast} onOpenLog={(runId, itemId) => openLogs({ tab: "transcodes", runId, itemId })} />}
+            {page === "logs" && <Logs onToast={setToast} initialTarget={logTarget} />}
             {page === "status" && <AdminStatusPage onToast={setToast} />}
             {page === "settings" && <Settings onToast={setToast} />}
           </>
@@ -677,7 +707,13 @@ function Directories({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
-function Scans({ onToast }: { onToast: (message: string) => void }) {
+function Scans({
+  onToast,
+  onOpenLog
+}: {
+  onToast: (message: string) => void;
+  onOpenLog: (scanId: number) => void;
+}) {
   const [scans, setScans] = useState<ScanJob[]>([]);
   const [isStarting, setIsStarting] = useState(false);
   useEffect(() => {
@@ -789,6 +825,7 @@ function Scans({ onToast }: { onToast: (message: string) => void }) {
                     {scan.current_path}
                   </td>
                   <td className="rowActions">
+                    <button onClick={() => onOpenLog(scan.id)}>Logs</button>
                     {["queued", "running"].includes(scan.status) && <button onClick={() => cancel(scan.id)}>Cancel</button>}
                     {["failed", "canceled", "interrupted"].includes(scan.status) && <button onClick={() => retry(scan.id)}>Retry</button>}
                   </td>
@@ -988,14 +1025,23 @@ function Library({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
-function Candidates({ onToast }: { onToast: (message: string) => void }) {
-  const [category, setCategory] = useState("Easy Win");
+function Candidates({
+  onToast,
+  onPlanCategory
+}: {
+  onToast: (message: string) => void;
+  onPlanCategory: (category: PlannerCategory) => void;
+}) {
+  const [category, setCategory] = useState<CandidateCategory>("Easy Win");
   return (
     <section className="stack">
-      <div className="tabs">
-        {["Easy Win", "Remux Only", "Review", "Already Modern", "Error"].map((item) => (
-          <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>{item}</button>
-        ))}
+      <div className="panelIntro">
+        <div className="tabs">
+          {candidateCategories.map((item) => (
+            <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>{item}</button>
+          ))}
+        </div>
+        {isPlannerCategory(category) && <button className="primary" onClick={() => onPlanCategory(category)}>Plan this category</button>}
       </div>
       <CandidateList category={category} onToast={onToast} />
     </section>
@@ -1383,17 +1429,31 @@ function RetentionTranscodeDialog({
   onToast: (message: string) => void;
 }) {
   const eligibleFiles = (candidate.files || []).filter((file) => file.media_atlas_file_id);
-  const preferred = eligibleFiles.filter((file) => ["Easy Win", "Remux Only", "Review"].includes(file.recommendation_category || ""));
-  const [profileId, setProfileId] = useState(defaultProfileId(profiles));
+  const preferred = eligibleFiles.filter((file) => isPlannerCategory(file.recommendation_category));
+  const availableCategories = plannerCategories.filter((item) => preferred.some((file) => file.recommendation_category === item));
+  const initialCategory = availableCategories[0] || "Review";
+  const [category, setCategory] = useState<PlannerCategory>(initialCategory);
+  const categoryFiles = preferred.filter((file) => file.recommendation_category === category);
+  const [profileId, setProfileId] = useState(defaultProfileId(profiles, initialCategory));
   const [name, setName] = useState(`Retention review: ${candidate.title}`);
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(
-    new Set((preferred.length ? preferred : eligibleFiles).map((file) => Number(file.media_atlas_file_id)))
+    new Set(preferred.filter((file) => file.recommendation_category === initialCategory).map((file) => Number(file.media_atlas_file_id)))
   );
 
   function toggle(fileId: number) {
     const next = new Set(selectedFiles);
     next.has(fileId) ? next.delete(fileId) : next.add(fileId);
     setSelectedFiles(next);
+  }
+
+  function changeCategory(nextCategory: PlannerCategory) {
+    setCategory(nextCategory);
+    setProfileId(suggestedProfileId(profiles, nextCategory));
+    setSelectedFiles(new Set(
+      preferred
+        .filter((file) => file.recommendation_category === nextCategory)
+        .map((file) => Number(file.media_atlas_file_id))
+    ));
   }
 
   async function submit() {
@@ -1412,19 +1472,27 @@ function RetentionTranscodeDialog({
     <div className="dialogBackdrop" onClick={onClose}>
       <section className="dialogPanel" role="dialog" aria-modal="true" aria-labelledby="retention-transcode-title" onClick={(event) => event.stopPropagation()}>
         <div className="drawerHeader"><div><h2 id="retention-transcode-title">Create transcode plan</h2><p className="muted">{candidate.title} · creating this plan does not start a transcode.</p></div><button onClick={onClose}>Close</button></div>
+        {availableCategories.length > 0 && (
+          <div className="tabs">
+            {availableCategories.map((item) => <button key={item} className={category === item ? "active" : ""} onClick={() => changeCategory(item)}>{item}</button>)}
+          </div>
+        )}
         <div className="formGrid retentionTranscodeForm">
           <label>Plan name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
           <label>Profile<select value={profileId} onChange={(event) => setProfileId(Number(event.target.value))}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
         </div>
+        {profileGuidanceWarning(category, selectedProfile(profiles, profileId)) && (
+          <div className="guidanceWarning" role="status"><strong>Profile guidance</strong><span>{profileGuidanceWarning(category, selectedProfile(profiles, profileId))}</span></div>
+        )}
         <div className="checkList retentionTranscodeFiles">
-          {eligibleFiles.map((file) => (
+          {categoryFiles.map((file) => (
             <label className="checkRow" key={file.id}>
               <input type="checkbox" checked={selectedFiles.has(Number(file.media_atlas_file_id))} onChange={() => toggle(Number(file.media_atlas_file_id))} />
               <span><strong>{file.filename || file.path}</strong><span className="muted">{file.recommendation_category || "Uncategorized"} · {formatBytes(file.size_bytes)}</span></span>
             </label>
           ))}
         </div>
-        {!eligibleFiles.length && <p className="muted">No files in this candidate are matched to Media Atlas inventory, so a plan cannot be created.</p>}
+        {!preferred.length && <p className="muted">No present, successfully probed files in this candidate have an Easy Win, Remux Only, or Review recommendation, so a plan cannot be created.</p>}
         <div className="rowActions"><button className="primary" disabled={!profileId || !selectedFiles.size} onClick={submit}>Create plan</button><button onClick={onClose}>Cancel</button></div>
       </section>
     </div>
@@ -1453,35 +1521,96 @@ function Reports() {
   );
 }
 
-function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void; switchToRuns: () => void }) {
+function Planner({
+  onToast,
+  switchToRuns,
+  initialCategory
+}: {
+  onToast: (message: string) => void;
+  switchToRuns: () => void;
+  initialCategory: PlannerCategory;
+}) {
   const [profiles, setProfiles] = useState<TranscodeProfile[]>([]);
   const [plans, setPlans] = useState<TranscodePlan[]>([]);
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [profileId, setProfileId] = useState<number>(0);
-  const [name, setName] = useState("MVP transcode plan");
+  const [name, setName] = useState("Transcode plan");
   const [showArchived, setShowArchived] = useState(false);
+  const [category, setCategory] = useState<PlannerCategory>(initialCategory);
+  const [query, setQuery] = useState("");
+  const [candidatePage, setCandidatePage] = useState(1);
+  const [candidateTotal, setCandidateTotal] = useState(0);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
 
   useEffect(() => {
-    refresh();
+    refreshMetadata();
   }, [showArchived]);
 
-  async function refresh() {
-    const [nextProfiles, nextPlans, candidates] = await Promise.all([
-      api<TranscodeProfile[]>("/api/transcode-profiles"),
-      api<TranscodePlan[]>(`/api/transcode-plans${showArchived ? "?include_archived=true" : ""}`),
-      api<{ items: MediaFile[] }>("/api/media?recommendation_category=Easy%20Win&page_size=100&sort=size_bytes&direction=desc")
-    ]);
-    setProfiles(nextProfiles);
-    setPlans(nextPlans);
-    setFiles(candidates.items);
-    setProfileId((current) => current || defaultProfileId(nextProfiles));
+  useEffect(() => {
+    refreshCandidates();
+  }, [category, query, candidatePage]);
+
+  async function refreshMetadata() {
+    try {
+      const [nextProfiles, nextPlans] = await Promise.all([
+        api<TranscodeProfile[]>("/api/transcode-profiles"),
+        api<TranscodePlan[]>(`/api/transcode-plans${showArchived ? "?include_archived=true" : ""}`)
+      ]);
+      setProfiles(nextProfiles);
+      setPlans(nextPlans);
+      setProfileId((current) => current || suggestedProfileId(nextProfiles, category));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function refreshCandidates() {
+    const params = new URLSearchParams({
+      recommendation_category: category,
+      page: String(candidatePage),
+      page_size: "50",
+      sort: "size_bytes",
+      direction: "desc"
+    });
+    if (query.trim()) params.set("query", query.trim());
+    try {
+      setLoadingCandidates(true);
+      const candidates = await api<{ items: MediaFile[]; total: number }>(`/api/media?${params}`);
+      setFiles(candidates.items);
+      setCandidateTotal(candidates.total);
+    } catch (error) {
+      onToast(String(error));
+    } finally {
+      setLoadingCandidates(false);
+    }
   }
 
   function toggleFile(id: number) {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
+  }
+
+  function toggleVisibleFiles() {
+    const next = new Set(selected);
+    const allVisibleSelected = files.length > 0 && files.every((file) => next.has(file.id));
+    for (const file of files) {
+      allVisibleSelected ? next.delete(file.id) : next.add(file.id);
+    }
+    setSelected(next);
+  }
+
+  function changeCategory(nextCategory: PlannerCategory) {
+    if (nextCategory === category) return;
+    if (selected.size && !window.confirm(
+      `Switch to ${nextCategory}? Your ${selected.size} selected ${category} file${selected.size === 1 ? "" : "s"} will be cleared so a plan cannot mix recommendation categories.`
+    )) return;
+    setCategory(nextCategory);
+    setSelected(new Set());
+    setQuery("");
+    setCandidatePage(1);
+    setProfileId(suggestedProfileId(profiles, nextCategory));
   }
 
   async function create() {
@@ -1491,7 +1620,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
         body: JSON.stringify({ name, profile_id: profileId, file_ids: Array.from(selected) })
       });
       setSelected(new Set());
-      await refresh();
+      await refreshMetadata();
       onToast(`Created plan ${plan.id}.`);
     } catch (error) {
       onToast(String(error));
@@ -1515,7 +1644,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
     if (!window.confirm(`Archive "${plan.name}"? It will be hidden from the default planner view, but run history is preserved.`)) return;
     try {
       await api(`/api/transcode-plans/${plan.id}/archive`, { method: "POST", body: "{}" });
-      await refresh();
+      await refreshMetadata();
       onToast("Transcode plan archived.");
     } catch (error) {
       onToast(String(error));
@@ -1525,7 +1654,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
   async function unarchivePlan(plan: TranscodePlan) {
     try {
       await api(`/api/transcode-plans/${plan.id}/unarchive`, { method: "POST", body: "{}" });
-      await refresh();
+      await refreshMetadata();
       onToast("Transcode plan restored.");
     } catch (error) {
       onToast(String(error));
@@ -1536,7 +1665,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
     if (!window.confirm(`Delete "${plan.name}"? This removes the plan and its planned items. Source media and staged outputs are untouched.`)) return;
     try {
       await api(`/api/transcode-plans/${plan.id}`, { method: "DELETE" });
-      await refresh();
+      await refreshMetadata();
       onToast("Transcode plan deleted.");
     } catch (error) {
       onToast(String(error));
@@ -1584,6 +1713,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
                   <span className="mobileCellLabel">Files involved</span>
                   <div className="planFiles">
                     <strong>{plan.item_count || 0} files</strong>
+                    <span className="muted">{plan.runnable_item_count || 0} runnable</span>
                     {(plan.sample_items || []).map((item) => (
                       <span key={item.id} className="path">{planItemName(item)}</span>
                     ))}
@@ -1601,7 +1731,13 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
                     <button onClick={() => unarchivePlan(plan)}>Unarchive</button>
                   ) : (
                     <>
-                      <button onClick={() => startRun(plan)}>Start run</button>
+                      <button
+                        disabled={!plan.runnable_item_count}
+                        title={!plan.runnable_item_count ? "This review-only plan has no generated commands." : "Start a staged transcode run"}
+                        onClick={() => startRun(plan)}
+                      >
+                        {plan.runnable_item_count ? "Start run" : "Review only"}
+                      </button>
                       <button onClick={() => archivePlan(plan)}>Archive</button>
                     </>
                   )}
@@ -1612,10 +1748,15 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
           </tbody>
         </table>
       </Panel>
-      <Panel title="Create Plan From Easy Wins">
+      <Panel title="Create Plan">
         <div className="panelIntro">
-          <p className="muted">Choose candidate files and a staged-output profile.</p>
+          <p className="muted">Choose one recommendation category, select files, and review the suggested staged-output profile.</p>
           <a className="button" href={TRANSCODE_PROFILES_URL} target="_blank" rel="noreferrer">Profile guide</a>
+        </div>
+        <div className="tabs plannerCategoryTabs">
+          {plannerCategories.map((item) => (
+            <button key={item} className={category === item ? "active" : ""} onClick={() => changeCategory(item)}>{item}</button>
+          ))}
         </div>
         <div className="formGrid">
           <label>
@@ -1633,6 +1774,24 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
         {selectedProfile(profiles, profileId)?.description && (
           <p className="muted">{selectedProfile(profiles, profileId)?.description}</p>
         )}
+        {profileGuidanceWarning(category, selectedProfile(profiles, profileId)) && (
+          <div className="guidanceWarning" role="status">
+            <strong>Profile guidance</strong>
+            <span>{profileGuidanceWarning(category, selectedProfile(profiles, profileId))}</span>
+          </div>
+        )}
+        <div className="toolbar plannerCandidateToolbar">
+          <input
+            value={query}
+            onChange={(event) => { setCandidatePage(1); setQuery(event.target.value); }}
+            placeholder={`Search ${category} files`}
+          />
+          <button disabled={!files.length} onClick={toggleVisibleFiles}>
+            {files.length > 0 && files.every((file) => selected.has(file.id)) ? "Deselect this page" : "Select this page"}
+          </button>
+          <button disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear selection</button>
+          <span className="muted">{selected.size} selected · {candidateTotal} matching</span>
+        </div>
         <table className="plannerCandidateTable mobileStackTable">
           <thead>
             <tr>
@@ -1640,6 +1799,7 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
               <th>File</th>
               <th>Size</th>
               <th>Video</th>
+              <th>Category</th>
               <th>Reason</th>
             </tr>
           </thead>
@@ -1666,14 +1826,22 @@ function Planner({ onToast, switchToRuns }: { onToast: (message: string) => void
                   <span className="mobileCellLabel">Video</span>
                   {file.resolution_bucket} {file.primary_video_codec}
                 </td>
+                <td>
+                  <span className="mobileCellLabel">Category</span>
+                  <Badge tone={toneFor(file.recommendation_category)}>{file.recommendation_category || "Unknown"}</Badge>
+                </td>
                 <td className="candidateReasonCell">
                   <span className="mobileCellLabel">Reason</span>
-                  {file.recommendation_summary}
+                  <strong>{file.recommendation_summary}</strong>
+                  {file.recommendation_reasons?.length ? <div className="muted">{file.recommendation_reasons.join(" ")}</div> : null}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {loadingCandidates && <p className="muted">Loading candidates…</p>}
+        {!loadingCandidates && !files.length && <p className="muted">No {category} files match this search.</p>}
+        <Pager page={candidatePage} total={candidateTotal} pageSize={50} onPage={setCandidatePage} />
       </Panel>
     </section>
   );
@@ -1703,10 +1871,42 @@ function PlanRunSummary({ plan }: { plan: TranscodePlan }) {
   );
 }
 
-function defaultProfileId(profiles: TranscodeProfile[]) {
-  return profiles.find((profile) => profile.command_template === "hevc_archive_fast")?.id
+function defaultProfileId(profiles: TranscodeProfile[], category: PlannerCategory = "Easy Win") {
+  return suggestedProfileId(profiles, category)
     || profiles.find((profile) => profile.command_template !== "manual_review")?.id
     || 0;
+}
+
+function suggestedProfileId(profiles: TranscodeProfile[], category: PlannerCategory) {
+  const commandTemplate = category === "Remux Only"
+    ? "remux_mkv"
+    : category === "Review"
+      ? "manual_review"
+      : "hevc_archive_fast";
+  return profiles.find((profile) => profile.command_template === commandTemplate)?.id || 0;
+}
+
+function profileGuidanceWarning(category: PlannerCategory, profile?: TranscodeProfile) {
+  if (!profile) return "";
+  if (category === "Remux Only" && profile.command_template !== "remux_mkv") {
+    return profile.command_template === "manual_review"
+      ? "This profile creates a tracking plan without a runnable command."
+      : "This profile re-encodes media even though the recommendation says a stream-copy remux may be enough.";
+  }
+  if (category === "Easy Win" && profile.command_template === "remux_mkv") {
+    return "A remux changes only the container; it will not address the legacy codec or high-bitrate signal behind this recommendation.";
+  }
+  if (category === "Easy Win" && profile.command_template === "manual_review") {
+    return "This profile creates a tracking plan without a runnable command.";
+  }
+  if (category === "Review" && profile.command_template !== "manual_review") {
+    return "Review files have complex streams or quality considerations. Inspect each warning and validate staged output before publishing.";
+  }
+  return "";
+}
+
+function isPlannerCategory(category: string | null | undefined): category is PlannerCategory {
+  return plannerCategories.includes(category as PlannerCategory);
 }
 
 function selectedProfile(profiles: TranscodeProfile[], profileId: number) {
@@ -1774,12 +1974,17 @@ function summarizeRunSavings(run: TranscodeRun) {
     saved: sourceSize - outputSize
   };
 }
-function Runs({ onToast }: { onToast: (message: string) => void }) {
+function Runs({
+  onToast,
+  onOpenLog
+}: {
+  onToast: (message: string) => void;
+  onOpenLog: (runId: number, itemId: number) => void;
+}) {
   const [runs, setRuns] = useState<TranscodeRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selected, setSelected] = useState<TranscodeRun | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [log, setLog] = useState("");
   const [stats, setStats] = useState<TranscodeSavingsStats | null>(null);
 
   useEffect(() => {
@@ -1830,10 +2035,6 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
     onToast("Transcode run restored.");
     await refreshRuns();
     if (selectedId === id) await refreshRun(id);
-  }
-
-  async function showLog(runId: number, itemId: number) {
-    setLog(await apiText(`/api/transcode-runs/${runId}/items/${itemId}/log`));
   }
 
   async function cleanupRun(run: TranscodeRun) {
@@ -2171,7 +2372,7 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
                     </div>
                   </td>
                   <td className="rowActions">
-                    <button onClick={() => showLog(selected.id, item.id)}>Log</button>
+                    <button onClick={() => onOpenLog(selected.id, item.id)}>Log</button>
                     {canPublishItem(item) && <button className="danger" onClick={() => publishItem(selected.id, item)}>Publish</button>}
                     {canValidateItem(item) && <button onClick={() => validateItem(selected.id, item)}>Mark validated</button>}
                     {canCleanupItem(item) && <button className="danger" onClick={() => cleanupItem(selected.id, item)}>Clean up</button>}
@@ -2180,11 +2381,339 @@ function Runs({ onToast }: { onToast: (message: string) => void }) {
               ))}
             </tbody>
           </table>
-          {log && <pre className="log">{log}</pre>}
         </Panel>
       )}
     </section>
   );
+}
+
+function Logs({
+  onToast,
+  initialTarget
+}: {
+  onToast: (message: string) => void;
+  initialTarget: LogTarget;
+}) {
+  const [tab, setTab] = useState<LogTab>(initialTarget.tab);
+  return (
+    <section className="stack">
+      <div className="tabs logTabs" aria-label="Log source">
+        <button className={tab === "application" ? "active" : ""} onClick={() => setTab("application")}>Application</button>
+        <button className={tab === "transcodes" ? "active" : ""} onClick={() => setTab("transcodes")}>Transcodes</button>
+        <button className={tab === "scans" ? "active" : ""} onClick={() => setTab("scans")}>Scans</button>
+      </div>
+      {tab === "application" && <ApplicationLogs onToast={onToast} />}
+      {tab === "transcodes" && <TranscodeLogs onToast={onToast} initialTarget={initialTarget} />}
+      {tab === "scans" && <ScanLogs onToast={onToast} initialTarget={initialTarget} />}
+    </section>
+  );
+}
+
+function ApplicationLogs({ onToast }: { onToast: (message: string) => void }) {
+  const [result, setResult] = useState<ApplicationLogPage>({ items: [], limit: 200, truncated: false });
+  const [level, setLevel] = useState("");
+  const [loggerPrefix, setLoggerPrefix] = useState("");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(200);
+  const [polling, setPolling] = useState(true);
+  const [followLatest, setFollowLatest] = useState(true);
+  const viewerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    refresh();
+    if (!polling) return;
+    const timer = window.setInterval(refresh, 3000);
+    return () => window.clearInterval(timer);
+  }, [level, loggerPrefix, query, limit, polling]);
+
+  useEffect(() => {
+    if (followLatest && viewerRef.current) {
+      viewerRef.current.scrollTop = viewerRef.current.scrollHeight;
+    }
+  }, [result, followLatest]);
+
+  async function refresh() {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (level) params.set("level", level);
+    if (loggerPrefix.trim()) params.set("logger", loggerPrefix.trim());
+    if (query.trim()) params.set("query", query.trim());
+    try {
+      setResult(await api<ApplicationLogPage>(`/api/logs/application?${params}`));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  return (
+    <Panel title="Application Logs">
+      <div className="toolbar logFilters">
+        <select value={level} onChange={(event) => setLevel(event.target.value)} aria-label="Filter by log level">
+          <option value="">All levels</option>
+          <option value="debug">Debug</option>
+          <option value="info">Info</option>
+          <option value="warning">Warning</option>
+          <option value="error">Error</option>
+          <option value="critical">Critical</option>
+        </select>
+        <input value={loggerPrefix} onChange={(event) => setLoggerPrefix(event.target.value)} placeholder="Logger prefix" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search messages and context" />
+        <select value={limit} onChange={(event) => setLimit(Number(event.target.value))} aria-label="Log entry limit">
+          <option value={100}>Latest 100</option>
+          <option value={200}>Latest 200</option>
+          <option value={500}>Latest 500</option>
+        </select>
+        <button onClick={refresh}>Refresh</button>
+      </div>
+      <div className="panelIntro logOptions">
+        <span className="muted">
+          {result.items.length} entries{result.truncated ? " · older history was not loaded" : ""}
+        </span>
+        <div className="rowActions">
+          <label className="inlineCheck"><input type="checkbox" checked={polling} onChange={(event) => setPolling(event.target.checked)} />Auto refresh</label>
+          <label className="inlineCheck"><input type="checkbox" checked={followLatest} onChange={(event) => setFollowLatest(event.target.checked)} />Follow latest</label>
+        </div>
+      </div>
+      <div className="applicationLogViewer" ref={viewerRef} aria-live="polite">
+        {result.items.map((entry, index) => (
+          <div className={`applicationLogLine level-${entry.level}`} key={`${entry.timestamp}-${entry.request_id || entry.logger}-${index}`}>
+            <div className="applicationLogMeta">
+              <time dateTime={entry.timestamp}>{formatDateTime(entry.timestamp)}</time>
+              <Badge tone={logLevelTone(entry.level)}>{entry.level}</Badge>
+              <span>{entry.logger}</span>
+            </div>
+            <div className="applicationLogMessage">{entry.message}</div>
+            {applicationLogContext(entry) && <div className="applicationLogContext">{applicationLogContext(entry)}</div>}
+            {entry.exception && <pre>{entry.exception}</pre>}
+          </div>
+        ))}
+        {!result.items.length && <p className="muted">No application log entries match these filters.</p>}
+      </div>
+    </Panel>
+  );
+}
+
+function TranscodeLogs({
+  onToast,
+  initialTarget
+}: {
+  onToast: (message: string) => void;
+  initialTarget: LogTarget;
+}) {
+  const [runs, setRuns] = useState<TranscodeRun[]>([]);
+  const [runId, setRunId] = useState(initialTarget.tab === "transcodes" ? initialTarget.runId || 0 : 0);
+  const [itemId, setItemId] = useState(initialTarget.tab === "transcodes" ? initialTarget.itemId || 0 : 0);
+  const [run, setRun] = useState<TranscodeRun | null>(null);
+  const [log, setLog] = useState("");
+  const [polling, setPolling] = useState(true);
+  const [followLatest, setFollowLatest] = useState(true);
+  const viewerRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    refreshRuns();
+    const timer = window.setInterval(refreshRuns, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!runId) return;
+    refreshRun(runId);
+    if (!polling) return;
+    const timer = window.setInterval(() => refreshRun(runId), 2000);
+    return () => window.clearInterval(timer);
+  }, [runId, polling]);
+
+  useEffect(() => {
+    if (!runId || !itemId) {
+      setLog("");
+      return;
+    }
+    refreshLog(runId, itemId);
+    if (!polling) return;
+    const timer = window.setInterval(() => refreshLog(runId, itemId), 2000);
+    return () => window.clearInterval(timer);
+  }, [runId, itemId, polling]);
+
+  useEffect(() => {
+    if (followLatest && viewerRef.current) {
+      viewerRef.current.scrollTop = viewerRef.current.scrollHeight;
+    }
+  }, [log, followLatest]);
+
+  async function refreshRuns() {
+    try {
+      const nextRuns = await api<TranscodeRun[]>("/api/transcode-runs?limit=200&include_archived=true");
+      setRuns(nextRuns);
+      setRunId((current) => current || nextRuns[0]?.id || 0);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function refreshRun(id: number) {
+    try {
+      const nextRun = await api<TranscodeRun>(`/api/transcode-runs/${id}`);
+      setRun(nextRun);
+      setItemId((current) => {
+        if (current && nextRun.items?.some((item) => item.id === current)) return current;
+        if (nextRun.current_item_id && nextRun.items?.some((item) => item.id === nextRun.current_item_id)) return nextRun.current_item_id;
+        return nextRun.items?.[0]?.id || 0;
+      });
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function refreshLog(nextRunId = runId, nextItemId = itemId) {
+    if (!nextRunId || !nextItemId) return;
+    try {
+      setLog(await apiText(`/api/transcode-runs/${nextRunId}/items/${nextItemId}/log`));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  const item = run?.items?.find((candidate) => candidate.id === itemId);
+  return (
+    <Panel title="Transcode Logs">
+      <div className="toolbar logSourceSelectors">
+        <label>
+          Run
+          <select value={runId} onChange={(event) => { setRunId(Number(event.target.value)); setItemId(0); }}>
+            {!runs.length && <option value={0}>No transcode runs</option>}
+            {runs.map((candidate) => <option key={candidate.id} value={candidate.id}>#{candidate.id} · {candidate.name} · {formatStatusLabel(candidate.status)}</option>)}
+          </select>
+        </label>
+        <label>
+          Item
+          <select value={itemId} onChange={(event) => setItemId(Number(event.target.value))} disabled={!run?.items?.length}>
+            {!run?.items?.length && <option value={0}>No run items</option>}
+            {run?.items?.map((candidate) => <option key={candidate.id} value={candidate.id}>#{candidate.id} · {planPathName(candidate.source_path)} · {formatStatusLabel(candidate.status)}</option>)}
+          </select>
+        </label>
+        <button onClick={() => { if (runId) refreshRun(runId); refreshLog(); }}>Refresh</button>
+      </div>
+      <div className="panelIntro logOptions">
+        <div className="statusGrid">
+          {run && <div><StatusBadge status={run.status} /> <span className="muted">Run #{run.id} · {run.message}</span></div>}
+          {item && <span className="path">{item.source_path}</span>}
+        </div>
+        <div className="rowActions">
+          <label className="inlineCheck"><input type="checkbox" checked={polling} onChange={(event) => setPolling(event.target.checked)} />Auto refresh</label>
+          <label className="inlineCheck"><input type="checkbox" checked={followLatest} onChange={(event) => setFollowLatest(event.target.checked)} />Follow latest</label>
+        </div>
+      </div>
+      <pre className="log logViewer" ref={viewerRef}>{log || (item ? "No transcode output has been recorded for this item yet." : "Select a transcode run and item.")}</pre>
+    </Panel>
+  );
+}
+
+function ScanLogs({
+  onToast,
+  initialTarget
+}: {
+  onToast: (message: string) => void;
+  initialTarget: LogTarget;
+}) {
+  const [scans, setScans] = useState<ScanJob[]>([]);
+  const [scanId, setScanId] = useState(initialTarget.tab === "scans" ? initialTarget.scanId || 0 : 0);
+  const [scan, setScan] = useState<ScanJob | null>(null);
+  const [polling, setPolling] = useState(true);
+
+  useEffect(() => {
+    refreshScans();
+    const timer = window.setInterval(refreshScans, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!scanId) return;
+    refreshScan(scanId);
+    if (!polling) return;
+    const timer = window.setInterval(() => refreshScan(scanId), 2000);
+    return () => window.clearInterval(timer);
+  }, [scanId, polling]);
+
+  async function refreshScans() {
+    try {
+      const nextScans = await api<ScanJob[]>("/api/scans?limit=100");
+      setScans(nextScans);
+      setScanId((current) => current || nextScans[0]?.id || 0);
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function refreshScan(id: number) {
+    try {
+      setScan(await api<ScanJob>(`/api/scans/${id}`));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  const progress = scan ? scanProgress(scan) : null;
+  return (
+    <Panel title="Scan Logs">
+      <div className="toolbar logSourceSelectors">
+        <label>
+          Scan
+          <select value={scanId} onChange={(event) => setScanId(Number(event.target.value))}>
+            {!scans.length && <option value={0}>No scans</option>}
+            {scans.map((candidate) => <option key={candidate.id} value={candidate.id}>#{candidate.id} · {formatStatusLabel(candidate.status)} · {formatDateTime(candidate.created_at)}</option>)}
+          </select>
+        </label>
+        <button onClick={() => scanId && refreshScan(scanId)}>Refresh</button>
+        <label className="inlineCheck"><input type="checkbox" checked={polling} onChange={(event) => setPolling(event.target.checked)} />Auto refresh</label>
+      </div>
+      {scan && (
+        <div className="scanLogSummary">
+          <div className="progressHeader"><StatusBadge status={scan.status} /><strong>{progress?.percent || 0}%</strong></div>
+          <Progress value={progress?.percent || 0} />
+          <span>{scan.message}</span>
+          {scan.current_path && <span className="path">Current: {scan.current_path}</span>}
+          <span className="muted">{scan.files_probed} probed · {scan.files_skipped} skipped · {scan.files_failed} failed · {scan.total_files_discovered} discovered</span>
+        </div>
+      )}
+      <div className="scanErrorList">
+        {scan?.errors?.map((error) => (
+          <article key={error.id}>
+            <div className="panelIntro">
+              <div><Badge tone="bad">{error.error_type}</Badge> <span className="muted">{formatDateTime(error.created_at)}</span></div>
+              {error.ffprobe_exit_code != null && <span>ffprobe exit {error.ffprobe_exit_code}</span>}
+            </div>
+            <div className="path">{error.path}</div>
+            <p>{error.error_message}</p>
+            {error.stderr && <pre className="log">{error.stderr}</pre>}
+          </article>
+        ))}
+        {scan && !scan.errors?.length && <p className="muted">No errors were recorded for this scan.</p>}
+        {!scan && <p className="muted">Select a scan to inspect its status and errors.</p>}
+      </div>
+    </Panel>
+  );
+}
+
+function applicationLogContext(entry: ApplicationLogEntry) {
+  return [
+    entry.method && entry.path ? `${entry.method} ${entry.path}` : entry.path,
+    entry.status_code != null ? `status ${entry.status_code}` : null,
+    entry.duration_ms != null ? `${entry.duration_ms} ms` : null,
+    entry.request_id ? `request ${entry.request_id}` : null,
+    entry.job_id != null ? `job #${entry.job_id}` : null,
+    entry.run_id != null ? `run #${entry.run_id}` : null
+  ].filter(Boolean).join(" · ");
+}
+
+function logLevelTone(level: string): "good" | "warn" | "bad" | "muted" {
+  if (["error", "critical"].includes(level)) return "bad";
+  if (level === "warning") return "warn";
+  if (level === "info") return "good";
+  return "muted";
+}
+
+function planPathName(path: string) {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
 }
 
 function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {

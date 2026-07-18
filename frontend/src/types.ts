@@ -94,6 +94,39 @@ export type ScanJob = {
   files_failed: number;
   current_path?: string | null;
   message?: string | null;
+  errors?: ScanError[];
+};
+
+export type ScanError = {
+  id: number;
+  scan_job_id: number;
+  path: string;
+  error_type: string;
+  error_message: string;
+  ffprobe_exit_code?: number | null;
+  stderr?: string | null;
+  created_at: string;
+};
+
+export type ApplicationLogEntry = {
+  timestamp: string;
+  level: string;
+  logger: string;
+  message: string;
+  request_id?: string;
+  method?: string;
+  path?: string;
+  status_code?: number;
+  duration_ms?: number;
+  job_id?: number;
+  run_id?: number;
+  exception?: string;
+};
+
+export type ApplicationLogPage = {
+  items: ApplicationLogEntry[];
+  limit: number;
+  truncated: boolean;
 };
 
 export type MediaFile = {
@@ -386,6 +419,7 @@ export type TranscodePlan = {
   created_at: string;
   archived_at?: string | null;
   item_count?: number;
+  runnable_item_count?: number;
   items?: TranscodePlanItem[];
   sample_items?: TranscodePlanItem[];
   run_count?: number;
