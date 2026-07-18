@@ -617,6 +617,30 @@ label {
   min-width: 260px;
 }
 
+.plannerCategoryTabs {
+  margin-bottom: 16px;
+}
+
+.plannerCandidateToolbar {
+  grid-template-columns: minmax(240px, 1fr) auto auto auto;
+  margin-top: 16px;
+}
+
+.guidanceWarning {
+  align-items: start;
+  background: var(--badge-warn-bg);
+  border: 1px solid color-mix(in srgb, var(--badge-warn-text) 30%, transparent);
+  border-radius: 8px;
+  color: var(--badge-warn-text);
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.guidanceWarning span {
+  line-height: 1.45;
+}
+
 .mediaFilesTable .mobileStackPrimary,
 .transcodeRunsTable .mobileStackPrimary {
   min-width: 220px;
@@ -841,6 +865,97 @@ label {
   overflow: auto;
   padding: 14px;
   white-space: pre-wrap;
+}
+
+.logFilters {
+  grid-template-columns: minmax(130px, 0.7fr) minmax(170px, 1fr) minmax(240px, 1.6fr) minmax(130px, 0.7fr) auto;
+}
+
+.logSourceSelectors {
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) auto;
+}
+
+.logOptions {
+  border-bottom: 1px solid var(--divider-soft);
+  padding-bottom: 12px;
+}
+
+.applicationLogViewer,
+.logViewer {
+  background: var(--code-bg);
+  border-radius: 8px;
+  color: var(--code-text);
+  max-height: 620px;
+  min-height: 260px;
+  overflow: auto;
+}
+
+.applicationLogViewer {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  padding: 8px 14px;
+}
+
+.applicationLogLine {
+  border-bottom: 1px solid color-mix(in srgb, var(--code-text) 14%, transparent);
+  display: grid;
+  gap: 5px;
+  padding: 11px 0;
+}
+
+.applicationLogLine:last-child {
+  border-bottom: 0;
+}
+
+.applicationLogMeta {
+  align-items: center;
+  color: color-mix(in srgb, var(--code-text) 72%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.applicationLogMessage {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.applicationLogContext {
+  color: color-mix(in srgb, var(--code-text) 72%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.applicationLogLine pre {
+  color: var(--badge-bad-text);
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.scanLogSummary {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.scanErrorList {
+  display: grid;
+  gap: 12px;
+}
+
+.scanErrorList article {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.scanErrorList article p {
+  margin: 0;
 }
 
 .progress {

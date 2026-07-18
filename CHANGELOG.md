@@ -4,6 +4,8 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Added a centralized Logs page for filtered application events, live transcode output, and scan diagnostics. Application logs now persist as daily UTC-rotated JSONL files under the configured logs directory while continuing to stream to stdout.
+- Expanded the Transcode Planner to support Easy Win, Remux Only, and Review workflows with search, pagination, page selection, category-specific profile suggestions, override warnings, direct links from Quality Candidates, and clear review-only plan state.
 - Fixed Plex TV-library syncs to fetch episode media parts so scanned episode files can be path-matched and enriched.
 - Added Media Retention Review, correlating paginated Seerr requests, multiple Sonarr/Radarr instances, Media Atlas inventory, and Plex history into atomic whole-movie/whole-series candidate snapshots.
 - Added redacted retention connection management, per-service path mappings and Seerr service IDs, an optional disabled-by-default 03:00 schedule, source warnings, CSV export, responsive Retention UI, dashboard metrics, and analysis/action history.
