@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import db
 from .config import CONFIG, DEFAULT_EXCLUDES, DEFAULT_EXTENSIONS
-from .health import admin_status, diagnostics_status, live_status, metrics_status, readiness_status
+from .health import admin_status, diagnostics_status, live_status, metrics_status, readiness_status, version_status
 from .logging_config import configure_logging, read_application_logs
 from .security import (
     authenticated_user,
@@ -280,6 +280,11 @@ async def health_live() -> dict[str, Any]:
 async def health_ready() -> Response:
     status = readiness_status()
     return JSONResponse(status, status_code=200 if status["ok"] else 503)
+
+
+@app.get("/api/version")
+async def version() -> dict[str, Any]:
+    return version_status()
 
 
 @app.get("/api/auth/me")

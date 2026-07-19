@@ -4,6 +4,9 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Added an authenticated version endpoint and a bottom-pinned sidebar release tag with a silent unavailable fallback.
+- Fixed release image builds to embed and verify the GitHub release tag as application version metadata.
+- Added a reproducible synthetic documentation dataset and a ten-screen Web UI visual tour.
 - Added a centralized Logs page for filtered application events, live transcode output, and scan diagnostics. Application logs now persist as daily UTC-rotated JSONL files under the configured logs directory while continuing to stream to stdout.
 - Expanded the Transcode Planner to support Easy Win, Remux Only, and Review workflows with search, pagination, page selection, category-specific profile suggestions, override warnings, direct links from Quality Candidates, and clear review-only plan state.
 - Fixed Plex TV-library syncs to fetch episode media parts so scanned episode files can be path-matched and enriched.
