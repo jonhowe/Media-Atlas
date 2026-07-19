@@ -878,15 +878,17 @@ def _seed_retention(
         INSERT INTO retention_analysis_jobs (
             status, trigger_type, created_at, started_at, finished_at, progress_percent,
             current_stage, message, warnings_json, candidate_count, diagnostic_count,
-            total_size_bytes
+            total_size_bytes, evaluated_title_count, review_ready_scope_count,
+            attention_scope_count, review_ready_size_bytes
         ) VALUES ('succeeded_with_warnings', 'scheduled', ?, ?, ?, 100, 'complete',
-                  'Retention analysis completed with source warnings.', ?, 2, 1, ?)
+                  'Retention analysis completed with source warnings.', ?, 2, 1, ?, 3, 2, 1, ?)
         """,
         (
             "2026-07-01T03:00:00+00:00",
             "2026-07-01T03:00:02+00:00",
             "2026-07-01T03:02:10+00:00",
             db.dumps([{"source": "Demo Sonarr", "message": "One synthetic source response required a retry."}]),
+            30_500_000_000,
             30_500_000_000,
         ),
     ).lastrowid
@@ -924,7 +926,14 @@ def _seed_retention(
                 file_count,
                 matched_count,
                 db.dumps(requesters),
-                db.dumps([{"requested_at": "2025-10-01T12:00:00+00:00", "requested_by": requesters[0]}]),
+                db.dumps([{
+                    "created_at": "2025-10-01T12:00:00+00:00",
+                    "requester": requesters[0],
+                    "is_4k": title in {"Aurora Station", "Harbor Lights"},
+                    "status": 2,
+                    "seasons": [{"season_number": 1, "status": 2, "created_at": "2025-10-01T12:00:00+00:00"}]
+                    if media_type == "tv" else [],
+                }]),
                 "2025-10-01T12:00:00+00:00",
                 "2025-10-05T12:00:00+00:00",
                 "2026-01-05T12:00:00+00:00",
@@ -975,6 +984,101 @@ def _seed_retention(
                     synthetic_path,
                     4_100_000_000,
                     files["harbor_lights"],
+                ),
+                )
+
+    for candidate_id in candidate_ids.values():
+        candidate = connection.execute(
+            "SELECT * FROM retention_candidates WHERE id = ?", (candidate_id,)
+        ).fetchone()
+        decision = "review_ready" if candidate["status"] == "active" else "needs_attention"
+        review_cursor = connection.execute(
+            """
+            INSERT INTO retention_review_items (
+                analysis_job_id, candidate_id, connection_id, result_key, service_item_id,
+                seerr_media_id, media_type, title, year, tmdb_id, tvdb_id, is_4k,
+                requesters_json, requests_json, overall_decision, reason, deletion_eligible,
+                total_size_bytes, total_file_count, review_ready_file_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                candidate_id,
+                candidate["connection_id"],
+                f"demo:{candidate_id}",
+                candidate["service_item_id"],
+                candidate["seerr_media_id"],
+                candidate["media_type"],
+                candidate["title"],
+                candidate["year"],
+                candidate["tmdb_id"],
+                candidate["tvdb_id"],
+                candidate["is_4k"],
+                candidate["requesters_json"],
+                candidate["requests_json"],
+                decision,
+                candidate["reason"],
+                1 if candidate["status"] == "active" else 0,
+                candidate["size_bytes"],
+                candidate["file_count"],
+                candidate["matched_file_count"] if candidate["status"] == "active" else 0,
+                BASE_TIME,
+            ),
+        )
+        scope_cursor = connection.execute(
+            """
+            INSERT INTO retention_review_scopes (
+                review_item_id, scope_type, season_number, decision, reason, latest_request_at,
+                total_size_bytes, file_count, review_ready_file_count, waiting_file_count,
+                protected_file_count, attention_file_count, planning_eligible_file_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+            """,
+            (
+                review_cursor.lastrowid,
+                "movie" if candidate["media_type"] == "movie" else "season",
+                None if candidate["media_type"] == "movie" else 1,
+                decision,
+                candidate["reason"],
+                candidate["latest_request_at"],
+                candidate["size_bytes"],
+                candidate["file_count"],
+                candidate["matched_file_count"] if candidate["status"] == "active" else 0,
+                candidate["file_count"] if candidate["status"] == "diagnostic" else 0,
+                candidate["matched_file_count"],
+                BASE_TIME,
+            ),
+        )
+        candidate_files = connection.execute(
+            "SELECT * FROM retention_candidate_files WHERE candidate_id = ? ORDER BY id",
+            (candidate_id,),
+        ).fetchall()
+        for candidate_file in candidate_files:
+            file_decision = "review_ready" if decision == "review_ready" else "needs_attention"
+            connection.execute(
+                """
+                INSERT INTO retention_review_files (
+                    review_scope_id, candidate_file_id, service_file_id, path, normalized_path,
+                    size_bytes, date_added, eligible_since, media_atlas_file_id, plex_item_id,
+                    plex_rating_key, match_status, decision, reason, planning_eligible, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_cursor.lastrowid,
+                    candidate_file["id"],
+                    candidate_file["service_file_id"],
+                    candidate_file["path"],
+                    candidate_file["normalized_path"],
+                    candidate_file["size_bytes"],
+                    candidate_file["date_added"],
+                    candidate["eligible_since"],
+                    candidate_file["media_atlas_file_id"],
+                    candidate_file["plex_item_id"],
+                    candidate_file["plex_rating_key"],
+                    candidate_file["match_status"],
+                    file_decision,
+                    candidate["reason"],
+                    1 if candidate_file["media_atlas_file_id"] else 0,
+                    BASE_TIME,
                 ),
             )
 

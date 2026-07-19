@@ -4,6 +4,8 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Expanded retention analysis with an exhaustive decision ledger, requested-season and per-file TV eligibility, partially available season support, scoped transcode planning, comprehensive result filters/CSV, and unchanged whole-copy deletion safeguards.
+- Added SQLite migration `0009_retention_evaluation_ledger` with compatible legacy snapshot backfill.
 - Added an authenticated version endpoint and a bottom-pinned sidebar release tag with a silent unavailable fallback.
 - Fixed release image builds to embed and verify the GitHub release tag as application version metadata.
 - Added a reproducible synthetic documentation dataset and a ten-screen Web UI visual tour.

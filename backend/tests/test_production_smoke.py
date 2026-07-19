@@ -445,6 +445,8 @@ class ProductionSmokeTest(unittest.TestCase):
                 self.assertNotIn("retention-smoke-secret", retention_connections.text)
                 retention_export = client.get("/api/exports/retention-candidates.csv")
                 self.assertEqual(retention_export.status_code, 200)
+                retention_results_export = client.get("/api/exports/retention-results.csv")
+                self.assertEqual(retention_results_export.status_code, 200)
 
                 admin_status = client.get("/api/admin/status")
                 self.assertEqual(admin_status.status_code, 200)

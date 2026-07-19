@@ -44,7 +44,7 @@ class DocumentationDemoTest(unittest.TestCase):
             database = output_dir / "data" / "media_inventory.sqlite"
             with sqlite3.connect(database) as connection:
                 migrations = connection.execute("SELECT version FROM schema_migrations").fetchall()
-                self.assertGreaterEqual(len(migrations), 8)
+                self.assertGreaterEqual(len(migrations), 9)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM files").fetchone()[0], 12)
                 self.assertEqual(
                     connection.execute("SELECT COUNT(*) FROM plex_file_matches").fetchone()[0],
@@ -52,6 +52,10 @@ class DocumentationDemoTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     connection.execute("SELECT COUNT(*) FROM retention_candidates").fetchone()[0],
+                    3,
+                )
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM retention_review_items").fetchone()[0],
                     3,
                 )
                 secrets = connection.execute(
@@ -118,7 +122,10 @@ class DocumentationDemoTest(unittest.TestCase):
                 self.assertEqual(_get_json(port, "/api/version")["version"], "v9.9.9-docs")
                 self.assertEqual(_get_json(port, "/api/reports/summary")["total_files"], 12)
                 self.assertEqual(_get_json(port, "/api/media?page=1&page_size=50")["total"], 12)
-                self.assertEqual(_get_json(port, "/api/retention/summary")["candidate_count"], 2)
+                retention_summary = _get_json(port, "/api/retention/summary")
+                self.assertEqual(retention_summary["candidate_count"], 2)
+                self.assertEqual(retention_summary["review_ready_scope_count"], 2)
+                self.assertEqual(_get_json(port, "/api/retention/results?decision=all")["total"], 3)
                 self.assertEqual(len(_get_json(port, "/api/transcode-runs?include_archived=true")), 2)
                 self.assertEqual(len(_get_json(port, "/api/scans")), 2)
                 self.assertGreaterEqual(len(_get_json(port, "/api/logs/application")["items"]), 6)

@@ -68,8 +68,9 @@ Migration `0008_media_retention_review` only adds retention connection, job, can
 Before the first analysis, confirm Plex is enabled and synced, one Seerr connection is enabled, and every Arr instance has the correct Seerr service ID and path mappings. Use the connection Test buttons in Settings.
 
 - Plex or Seerr failure fails the analysis and preserves the previous successful snapshot.
-- A single Arr failure completes with warnings and excludes that instance from the new snapshot. Old candidates from that instance do not carry forward.
-- Incomplete file mapping appears under mapping diagnostics and cannot be deleted. Correct the Arr-to-container or Plex-to-container mapping, sync Plex, and rerun analysis.
+- A single Arr failure completes with warnings and publishes source-unavailable review results for routed requests. Old deletion candidates from that instance do not carry forward.
+- Use the result filters to distinguish waiting-period, protected-by-play, routing, missing-file, and mapping outcomes. Correct Arr service IDs or path mappings, sync Plex, and rerun analysis after configuration fixes.
+- TV seasons without Seerr season metadata appear as a whole-series fallback diagnostic; Media Atlas does not guess which managed files were requested.
 - Scheduled analysis is disabled by default. When enabled, it runs once at the configured server-local time, never overlaps, and does not catch up after downtime.
 - A backend restart marks an active analysis interrupted. Retry it from Retention; partial snapshots are not published.
 

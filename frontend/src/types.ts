@@ -293,6 +293,12 @@ export type RetentionAnalysisJob = {
   candidate_count: number;
   diagnostic_count: number;
   total_size_bytes: number;
+  evaluated_title_count: number;
+  review_ready_scope_count: number;
+  waiting_scope_count: number;
+  protected_scope_count: number;
+  attention_scope_count: number;
+  review_ready_size_bytes: number;
   cancel_requested: boolean;
 };
 
@@ -300,6 +306,12 @@ export type RetentionSummary = {
   candidate_count: number;
   diagnostic_count: number;
   total_size_bytes: number;
+  evaluated_title_count: number;
+  review_ready_scope_count: number;
+  waiting_scope_count: number;
+  protected_scope_count: number;
+  attention_scope_count: number;
+  review_ready_size_bytes: number;
   latest_analysis?: RetentionAnalysisJob | null;
   snapshot_job_id?: number | null;
   configured: boolean;
@@ -323,9 +335,15 @@ export type RetentionCandidateFile = {
 
 export type RetentionRequest = {
   id?: number | null;
-  created_at: string;
+  created_at?: string | null;
   requester: string;
   is_4k: boolean;
+  status?: number | string | null;
+  seasons?: Array<{
+    season_number: number;
+    status?: number | string | null;
+    created_at?: string | null;
+  }>;
 };
 
 export type RetentionAction = {
@@ -368,7 +386,7 @@ export type RetentionCandidate = {
   available_since: string;
   eligible_since: string;
   reason: string;
-  status: "active" | "diagnostic";
+  status: "active" | "diagnostic" | "review_only";
   action_state?: string | null;
   available_actions: Array<"transcode_plan" | "delete">;
   files?: RetentionCandidateFile[];
@@ -377,6 +395,76 @@ export type RetentionCandidate = {
 
 export type RetentionCandidatePage = {
   items: RetentionCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  snapshot_job_id?: number | null;
+};
+
+export type RetentionReviewFile = {
+  id: number;
+  review_scope_id: number;
+  service_file_id?: number | null;
+  path: string;
+  normalized_path: string;
+  size_bytes: number;
+  date_added?: string | null;
+  eligible_since?: string | null;
+  media_atlas_file_id?: number | null;
+  plex_item_id?: number | null;
+  plex_rating_key?: string | null;
+  match_status: string;
+  decision: "review_ready" | "waiting" | "protected" | "needs_attention" | "not_actionable";
+  reason: string;
+  planning_eligible: boolean;
+  filename?: string | null;
+  recommendation_category?: string | null;
+};
+
+export type RetentionReviewScope = {
+  id: number;
+  review_item_id: number;
+  scope_type: "movie" | "season" | "series";
+  season_number?: number | null;
+  decision: "review_ready" | "waiting" | "protected" | "needs_attention" | "not_actionable";
+  reason: string;
+  latest_request_at?: string | null;
+  total_size_bytes: number;
+  file_count: number;
+  review_ready_file_count: number;
+  waiting_file_count: number;
+  protected_file_count: number;
+  attention_file_count: number;
+  planning_eligible_file_count: number;
+  available_actions: Array<"transcode_plan">;
+  files?: RetentionReviewFile[];
+};
+
+export type RetentionReviewResult = {
+  id: number;
+  analysis_job_id: number;
+  candidate_id?: number | null;
+  connection_id?: number | null;
+  connection_name?: string | null;
+  service_type?: "sonarr" | "radarr" | null;
+  media_type: "movie" | "tv";
+  title: string;
+  year?: number | null;
+  is_4k: boolean;
+  requesters: string[];
+  requests: RetentionRequest[];
+  overall_decision: RetentionReviewScope["decision"];
+  reason: string;
+  deletion_eligible: boolean;
+  total_size_bytes: number;
+  total_file_count: number;
+  review_ready_file_count: number;
+  scopes: RetentionReviewScope[];
+  available_actions: Array<"transcode_plan" | "delete">;
+};
+
+export type RetentionReviewPage = {
+  items: RetentionReviewResult[];
   total: number;
   page: number;
   page_size: number;

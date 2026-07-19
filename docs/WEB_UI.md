@@ -16,7 +16,7 @@ Search and filter the Library, then open a row to review technical media details
 
 ## Review retention evidence
 
-Retention candidates include their eligibility age, request history, mapped files, Plex play coverage, and the evidence behind the decision. Remediation remains an explicit operator action.
+Retention results group TV by requested season and explain which files are ready, waiting, protected by Plex plays, or need source/mapping attention. Review-ready files can create a scoped draft transcode plan; whole-copy deletion remains a separate guarded action.
 
 ![Retention detail drawer for the fictional Aurora Station movie showing eligibility and no qualifying Plex plays](assets/web-ui/retention.png)
 

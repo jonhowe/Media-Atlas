@@ -256,6 +256,97 @@ class MediaRetentionTest(unittest.TestCase):
         self.assertEqual(protected_job["candidate_count"], 0)
         self.assertEqual(list_candidates(status="active")["total"], 0)
 
+    def test_old_requested_season_is_review_ready_when_newer_season_is_recent(self) -> None:
+        from app.services import media_retention as module
+
+        state = FakeState()
+        arr_id, _ = self._create_source_data(state)
+        old = datetime.now(UTC) - timedelta(days=140)
+        recent = datetime.now(UTC) - timedelta(days=10)
+        second_path = "/media/Example Show/Season 02/Episode 01.mkv"
+        root = self.db.query_one("SELECT id FROM media_roots WHERE name = 'TV'")
+        second_file_id = self.db.execute(
+            """
+            INSERT INTO files (
+                root_id, path, directory, filename, extension, size_bytes, modified_time_ns,
+                first_seen_at, last_seen_at, is_missing, audio_stream_count, subtitle_stream_count,
+                video_stream_count, has_forced_subtitles, has_image_subtitles,
+                recommendation_category, updated_at
+            ) VALUES (?, ?, ?, 'Episode 01.mkv', '.mkv', 4000, 2, ?, ?, 0, 1, 0, 1, 0, 0, 'Easy Win', ?)
+            """,
+            (root["id"], second_path, str(Path(second_path).parent), self.db.utc_now(), self.db.utc_now(), self.db.utc_now()),
+        )
+        self.db.execute(
+            """
+            INSERT INTO plex_items (
+                rating_key, type, title, show_title, last_viewed_at, view_count,
+                collections_json, genres_json, labels_json, raw_json, last_synced_at, is_stale
+            ) VALUES ('plex-episode-2', 'episode', 'Return', 'Example Show', NULL, 0,
+                      '[]', '[]', '[]', '{}', ?, 0)
+            """,
+            (self.db.utc_now(),),
+        )
+        plex_item = self.db.query_one("SELECT id FROM plex_items WHERE rating_key = 'plex-episode-2'")
+        self.db.execute(
+            """
+            INSERT INTO plex_media_parts (
+                plex_item_id, part_id, file_path, normalized_path, size_bytes, last_synced_at
+            ) VALUES (?, 'part-2', ?, ?, 4000, ?)
+            """,
+            (plex_item["id"], second_path, second_path, self.db.utc_now()),
+        )
+        for request, season_number in zip(state.requests, (1, 2)):
+            request["createdAt"] = old.isoformat()
+            request["seasons"] = [{
+                "seasonNumber": season_number,
+                "status": 2,
+                "createdAt": old.isoformat(),
+            }]
+            request["media"]["status"] = 4
+        state.files[(arr_id, 700)] = [
+            {
+                **state.files[(arr_id, 700)][0],
+                "seasonNumber": 1,
+                "dateAdded": old.isoformat(),
+            },
+            {
+                "id": 901,
+                "relativePath": "Season 02/Episode 01.mkv",
+                "seasonNumber": 2,
+                "size": 4000,
+                "dateAdded": recent.isoformat(),
+            },
+        ]
+
+        job = self._run_analysis(state)
+        self.assertEqual(job["candidate_count"], 0)
+        self.assertEqual(job["review_ready_scope_count"], 1)
+        self.assertEqual(job["waiting_scope_count"], 1)
+        ready = module.list_review_results(decision="review_ready")
+        self.assertEqual(ready["total"], 1)
+        self.assertEqual(module.list_review_results(decision="waiting")["total"], 1)
+        detail = module.read_review_result(ready["items"][0]["id"])
+        seasons = {scope["season_number"]: scope for scope in detail["scopes"]}
+        self.assertEqual(seasons[1]["decision"], "review_ready")
+        self.assertEqual(seasons[2]["decision"], "waiting")
+        self.assertEqual(seasons[1]["planning_eligible_file_count"], 1)
+        plan = module.create_review_scope_transcode_plan(
+            detail["id"], seasons[1]["id"], 1, None, None, "tester"
+        )
+        self.assertEqual(len(plan["plan"]["items"]), 1)
+        self.assertNotEqual(plan["plan"]["items"][0]["file_id"], second_file_id)
+
+        state.history = [{
+            "historyKey": "season-one-play",
+            "ratingKey": "plex-episode-1",
+            "viewedAt": int(datetime.now(UTC).timestamp()),
+            "accountID": 42,
+            "type": "episode",
+        }]
+        protected_job = self._run_analysis(state)
+        self.assertEqual(protected_job["review_ready_scope_count"], 0)
+        self.assertEqual(protected_job["protected_scope_count"], 1)
+
     def test_boundaries_mapping_instance_selection_pagination_and_redaction(self) -> None:
         from app.services import media_retention as module
 
@@ -509,6 +600,7 @@ class MediaRetentionTest(unittest.TestCase):
             )
         self.db.init_db()
         self.assertIn("0008_media_retention_review", self.db.migration_status()["applied"])
+        self.assertIn("0009_retention_evaluation_ledger", self.db.migration_status()["applied"])
         self.assertEqual(self.db.query_one("SELECT name FROM media_roots")["name"], "Existing")
         self.assertIsNotNone(self.db.query_one(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'retention_candidates'"

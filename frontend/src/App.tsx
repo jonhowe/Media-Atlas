@@ -15,10 +15,12 @@ import type {
   PlexSyncJob,
   RetentionAction,
   RetentionAnalysisJob,
-  RetentionCandidate,
-  RetentionCandidatePage,
   RetentionConnection,
   RetentionPathMapping,
+  RetentionReviewFile,
+  RetentionReviewPage,
+  RetentionReviewResult,
+  RetentionReviewScope,
   RetentionSettings,
   RetentionSummary,
   ScanJob,
@@ -588,9 +590,10 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
         <Panel title="Retention Review">
           <div className="statusGrid">
             <div className="scanStats">
+              <span><strong>{retention?.review_ready_scope_count ?? 0}</strong> ready scopes</span>
+              <span><strong>{formatBytes(retention?.review_ready_size_bytes ?? 0)}</strong> ready storage</span>
               <span><strong>{retention?.candidate_count ?? 0}</strong> deletion candidates</span>
-              <span><strong>{retention?.diagnostic_count ?? 0}</strong> mapping diagnostics</span>
-              <span><strong>{formatBytes(retention?.total_size_bytes ?? 0)}</strong> reclaimable</span>
+              <span><strong>{retention?.evaluated_title_count ?? 0}</strong> evaluated titles</span>
               <span><strong>{retention?.latest_analysis?.warnings.length ?? 0}</strong> source warnings</span>
             </div>
             <span className="muted">
@@ -1092,50 +1095,50 @@ function CandidateList({ category, onToast }: { category: string; onToast: (mess
 function Retention({ onToast }: { onToast: (message: string) => void }) {
   const [summary, setSummary] = useState<RetentionSummary | null>(null);
   const [jobs, setJobs] = useState<RetentionAnalysisJob[]>([]);
-  const [candidates, setCandidates] = useState<RetentionCandidatePage | null>(null);
+  const [results, setResults] = useState<RetentionReviewPage | null>(null);
   const [connections, setConnections] = useState<RetentionConnection[]>([]);
   const [actions, setActions] = useState<RetentionAction[]>([]);
   const [profiles, setProfiles] = useState<TranscodeProfile[]>([]);
-  const [status, setStatus] = useState("active");
+  const [decision, setDecision] = useState("review_ready");
   const [mediaType, setMediaType] = useState("all");
   const [connectionId, setConnectionId] = useState("");
   const [query, setQuery] = useState("");
   const [page, setCandidatePage] = useState(1);
-  const [selected, setSelected] = useState<RetentionCandidate | null>(null);
-  const [transcodeCandidate, setTranscodeCandidate] = useState<RetentionCandidate | null>(null);
+  const [selected, setSelected] = useState<RetentionReviewResult | null>(null);
+  const [transcodeScope, setTranscodeScope] = useState<{ result: RetentionReviewResult; scope: RetentionReviewScope } | null>(null);
 
   useEffect(() => {
     refresh();
     const timer = window.setInterval(refresh, 5000);
     return () => window.clearInterval(timer);
-  }, [status, mediaType, connectionId, query, page]);
+  }, [decision, mediaType, connectionId, query, page]);
 
   async function refresh() {
     try {
       const params = new URLSearchParams({
         page: String(page),
         page_size: "50",
-        status,
+        decision,
         media_type: mediaType,
         query
       });
       if (connectionId) params.set("connection_id", connectionId);
-      const [nextSummary, nextJobs, nextCandidates, nextConnections, nextActions, nextProfiles] = await Promise.all([
+      const [nextSummary, nextJobs, nextResults, nextConnections, nextActions, nextProfiles] = await Promise.all([
         api<RetentionSummary>("/api/retention/summary"),
         api<RetentionAnalysisJob[]>("/api/retention/analyses?limit=20"),
-        api<RetentionCandidatePage>(`/api/retention/candidates?${params}`),
+        api<RetentionReviewPage>(`/api/retention/results?${params}`),
         api<RetentionConnection[]>("/api/retention/connections"),
         api<RetentionAction[]>("/api/retention/actions?limit=50"),
         api<TranscodeProfile[]>("/api/transcode-profiles")
       ]);
       setSummary(nextSummary);
       setJobs(nextJobs);
-      setCandidates(nextCandidates);
+      setResults(nextResults);
       setConnections(nextConnections);
       setActions(nextActions);
       setProfiles(nextProfiles);
       if (selected) {
-        const nextSelected = await api<RetentionCandidate>(`/api/retention/candidates/${selected.id}`);
+        const nextSelected = await api<RetentionReviewResult>(`/api/retention/results/${selected.id}`);
         setSelected(nextSelected);
       }
     } catch (error) {
@@ -1172,34 +1175,37 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
     }
   }
 
-  async function openDetail(candidateId: number) {
+  async function openDetail(resultId: number) {
     try {
-      setSelected(await api<RetentionCandidate>(`/api/retention/candidates/${candidateId}`));
+      setSelected(await api<RetentionReviewResult>(`/api/retention/results/${resultId}`));
     } catch (error) {
       onToast(String(error));
     }
   }
 
-  async function openTranscode(candidate: RetentionCandidate) {
+  async function openTranscode(result: RetentionReviewResult, scopeId: number) {
     try {
-      const detail = candidate.files
-        ? candidate
-        : await api<RetentionCandidate>(`/api/retention/candidates/${candidate.id}`);
-      setTranscodeCandidate(detail);
+      const detail = result.scopes.some((scope) => scope.files)
+        ? result
+        : await api<RetentionReviewResult>(`/api/retention/results/${result.id}`);
+      const scope = detail.scopes.find((item) => item.id === scopeId);
+      if (!scope) throw new Error("Retention review scope not found.");
+      setTranscodeScope({ result: detail, scope });
     } catch (error) {
       onToast(String(error));
     }
   }
 
-  async function deleteCandidate(candidate: RetentionCandidate) {
+  async function deleteResult(result: RetentionReviewResult) {
+    if (!result.candidate_id || !result.deletion_eligible) return;
     if (!window.confirm(
-      `Delete the entire ${candidate.media_type === "tv" ? "series" : "movie"} copy from ${candidate.connection_name}? This removes managed files through ${candidate.service_type}.`
+      `Delete the entire ${result.media_type === "tv" ? "series" : "movie"} copy from ${result.connection_name || "its owning service"}? This removes all managed files through ${result.service_type}.`
     )) return;
-    const expected = `DELETE ${candidate.title}`;
+    const expected = `DELETE ${result.title}`;
     const confirmation = window.prompt(`Type ${expected} to continue.`);
     if (confirmation === null) return;
     try {
-      await api(`/api/retention/candidates/${candidate.id}/delete`, {
+      await api(`/api/retention/candidates/${result.candidate_id}/delete`, {
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmation })
       });
@@ -1225,9 +1231,10 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
   return (
     <section className="stack">
       <div className="metrics">
+        <Metric label="Ready scopes" value={summary?.review_ready_scope_count ?? 0} />
+        <Metric label="Ready storage" value={formatBytes(summary?.review_ready_size_bytes ?? 0)} />
         <Metric label="Deletion candidates" value={summary?.candidate_count ?? 0} />
-        <Metric label="Reclaimable" value={formatBytes(summary?.total_size_bytes ?? 0)} />
-        <Metric label="Mapping diagnostics" value={summary?.diagnostic_count ?? 0} />
+        <Metric label="Evaluated titles" value={summary?.evaluated_title_count ?? 0} />
         <Metric label="Latest analysis" value={formatDateTime(latest?.finished_at || latest?.created_at)} />
       </div>
 
@@ -1267,18 +1274,23 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
             <button className="primary" disabled={Boolean(latest && ["queued", "running"].includes(latest.status))} onClick={startAnalysis}>Run analysis</button>
             {latest && ["queued", "running"].includes(latest.status) && <button onClick={() => cancelAnalysis(latest.id)}>Cancel</button>}
             {latest && ["failed", "canceled", "interrupted"].includes(latest.status) && <button onClick={() => retryAnalysis(latest.id)}>Retry</button>}
-            <a className="button" href={exportUrl("retention-candidates.csv")}>Export CSV</a>
+            <a className="button" href={exportUrl("retention-results.csv")}>Export results</a>
+            <a className="button" href={exportUrl("retention-candidates.csv")}>Export deletion candidates</a>
           </div>
         </div>
       </Panel>
 
-      <Panel title="Candidates">
+      <Panel title="Retention results">
         <div className="toolbar retentionFilters">
           <input value={query} onChange={(event) => { setCandidatePage(1); setQuery(event.target.value); }} placeholder="Search title" />
-          <select value={status} onChange={(event) => { setCandidatePage(1); setStatus(event.target.value); }}>
-            <option value="active">Deletion candidates</option>
-            <option value="diagnostic">Mapping diagnostics</option>
-            <option value="all">All results</option>
+          <select value={decision} onChange={(event) => { setCandidatePage(1); setDecision(event.target.value); }}>
+            <option value="review_ready">Ready for review</option>
+            <option value="deletion_eligible">Deletion eligible</option>
+            <option value="waiting">Waiting period</option>
+            <option value="protected">Protected by plays</option>
+            <option value="needs_attention">Needs attention</option>
+            <option value="not_actionable">Not actionable</option>
+            <option value="all">All evaluated</option>
           </select>
           <select value={mediaType} onChange={(event) => { setCandidatePage(1); setMediaType(event.target.value); }}>
             <option value="all">Movies and shows</option>
@@ -1293,38 +1305,45 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
           </select>
         </div>
         <table className="retentionCandidatesTable mobileStackTable">
-          <thead><tr><th>Title</th><th>Reason and requester</th><th>Storage</th><th>Eligibility</th><th>Coverage</th><th>Instance</th><th></th></tr></thead>
+          <thead><tr><th>Title</th><th>Requested scopes</th><th>Decision</th><th>Storage</th><th>Instance</th><th></th></tr></thead>
           <tbody>
-            {candidates?.items.map((candidate) => (
-              <tr key={candidate.id}>
+            {results?.items.map((result) => (
+              <tr key={result.id}>
                 <td className="mobileStackPrimary">
-                  <strong>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</strong>
-                  <span className="muted">{candidate.media_type === "tv" ? "Whole series" : "Movie"}{candidate.is_4k ? " · 4K" : ""}</span>
+                  <strong>{result.title}{result.year ? ` (${result.year})` : ""}</strong>
+                  <span className="muted">{result.media_type === "tv" ? "TV request" : "Movie"}{result.is_4k ? " · 4K" : ""}</span>
                 </td>
                 <td>
-                  <span className="mobileCellLabel">Reason</span>
-                  <span>{candidate.reason}</span>
-                  <div className="muted">Requested by {candidate.requesters.join(", ")}</div>
+                  <span className="mobileCellLabel">Scopes</span>
+                  <div className="compactList">
+                    {result.scopes.map((scope) => (
+                      <div key={scope.id}>
+                        <strong>{retentionScopeLabel(scope)}</strong>
+                        <Badge tone={scope.decision === "review_ready" ? "good" : scope.decision === "protected" ? "neutral" : "warn"}>{formatStatusLabel(scope.decision)}</Badge>
+                        <span>{scope.review_ready_file_count}/{scope.file_count} files ready</span>
+                        {scope.available_actions.includes("transcode_plan") && <button onClick={() => openTranscode(result, scope.id)}>Plan</button>}
+                      </div>
+                    ))}
+                  </div>
                 </td>
-                <td><span className="mobileCellLabel">Storage</span><strong>{formatBytes(candidate.size_bytes)}</strong><div className="muted">{candidate.file_count} files</div></td>
-                <td><span className="mobileCellLabel">Eligibility</span>{eligibilityAgeDays(candidate.eligible_since)} days<div className="muted">Since {formatDateTime(candidate.eligible_since)}</div></td>
                 <td>
-                  <span className="mobileCellLabel">Coverage</span>
-                  <Badge tone={candidate.status === "active" ? "good" : "warn"}>{candidate.matched_file_count}/{candidate.file_count} mapped</Badge>
-                  <div className="muted">Zero qualifying plays</div>
+                  <span className="mobileCellLabel">Decision</span>
+                  <Badge tone={result.overall_decision === "review_ready" ? "good" : result.overall_decision === "protected" ? "neutral" : "warn"}>{formatStatusLabel(result.overall_decision)}</Badge>
+                  <div className="muted">{result.reason}</div>
+                  <div className="muted">Requested by {result.requesters.join(", ")}</div>
                 </td>
-                <td><span className="mobileCellLabel">Instance</span>{candidate.connection_name}<div className="muted">{candidate.service_type}</div></td>
+                <td><span className="mobileCellLabel">Storage</span><strong>{formatBytes(result.total_size_bytes)}</strong><div className="muted">{result.total_file_count} managed files</div></td>
+                <td><span className="mobileCellLabel">Instance</span>{result.connection_name || "Unresolved"}<div className="muted">{result.service_type || "routing diagnostic"}</div></td>
                 <td className="rowActions">
-                  <button onClick={() => openDetail(candidate.id)}>Details</button>
-                  {candidate.available_actions.includes("transcode_plan") && <button onClick={() => openTranscode(candidate)}>Transcode plan</button>}
-                  {candidate.available_actions.includes("delete") && <button className="danger" onClick={() => deleteCandidate(candidate)}>Delete</button>}
+                  <button onClick={() => openDetail(result.id)}>Details</button>
+                  {result.available_actions.includes("delete") && <button className="danger" onClick={() => deleteResult(result)}>Delete whole copy</button>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!candidates?.items.length && <p className="muted">No candidates match these filters.</p>}
-        <Pager page={page} total={candidates?.total ?? 0} pageSize={50} onPage={setCandidatePage} />
+        {!results?.items.length && <p className="muted">No evaluated titles match these filters.</p>}
+        <Pager page={page} total={results?.total ?? 0} pageSize={50} onPage={setCandidatePage} itemLabel="titles" />
       </Panel>
 
       <Panel title="Analysis history">
@@ -1334,7 +1353,7 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
             <tr key={job.id}>
               <td className="mobileStackPrimary"><strong>#{job.id}</strong><div className="muted">{job.trigger_type}</div></td>
               <td><span className="mobileCellLabel">Status</span><StatusBadge status={job.status} /></td>
-              <td><span className="mobileCellLabel">Results</span>{job.candidate_count} candidates · {formatBytes(job.total_size_bytes)}<div className="muted">{job.diagnostic_count} diagnostics · {job.warnings.length} warnings</div></td>
+              <td><span className="mobileCellLabel">Results</span>{job.review_ready_scope_count} ready scopes · {formatBytes(job.review_ready_size_bytes)}<div className="muted">{job.candidate_count} deletion candidates · {job.evaluated_title_count} titles · {job.warnings.length} warnings</div></td>
               <td><span className="mobileCellLabel">Timing</span>{formatDateTime(job.created_at)}<div className="muted">Finished {formatDateTime(job.finished_at)}</div></td>
               <td><span className="mobileCellLabel">Message</span>{job.error_message || job.message}</td>
               <td className="rowActions">
@@ -1365,19 +1384,20 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
 
       {selected && (
         <RetentionDetailDrawer
-          candidate={selected}
+          result={selected}
           onClose={() => setSelected(null)}
           onTranscode={openTranscode}
-          onDelete={deleteCandidate}
+          onDelete={deleteResult}
         />
       )}
-      {transcodeCandidate && (
+      {transcodeScope && (
         <RetentionTranscodeDialog
-          candidate={transcodeCandidate}
+          result={transcodeScope.result}
+          scope={transcodeScope.scope}
           profiles={profiles}
-          onClose={() => setTranscodeCandidate(null)}
+          onClose={() => setTranscodeScope(null)}
           onCreated={async (planId) => {
-            setTranscodeCandidate(null);
+            setTranscodeScope(null);
             await refresh();
             onToast(`Created transcode plan ${planId}. No transcode was started.`);
           }}
@@ -1389,57 +1409,60 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
 }
 
 function RetentionDetailDrawer({
-  candidate,
+  result,
   onClose,
   onTranscode,
   onDelete
 }: {
-  candidate: RetentionCandidate;
+  result: RetentionReviewResult;
   onClose: () => void;
-  onTranscode: (candidate: RetentionCandidate) => void;
-  onDelete: (candidate: RetentionCandidate) => void;
+  onTranscode: (result: RetentionReviewResult, scopeId: number) => void;
+  onDelete: (result: RetentionReviewResult) => void;
 }) {
   return (
     <div className="drawerBackdrop" onClick={onClose}>
       <aside className="drawer" onClick={(event) => event.stopPropagation()}>
         <div className="drawerHeader">
-          <div><h2>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</h2><p className="muted">{candidate.connection_name} · {candidate.media_type === "tv" ? "whole series" : "movie"}</p></div>
+          <div><h2>{result.title}{result.year ? ` (${result.year})` : ""}</h2><p className="muted">{result.connection_name || "Unresolved source"} · {result.media_type === "tv" ? "season review" : "movie review"}</p></div>
           <button onClick={onClose}>Close</button>
         </div>
         <div className="metrics compact">
-          <Metric label="Exact disk size" value={formatBytes(candidate.size_bytes)} />
-          <Metric label="Eligibility age" value={`${eligibilityAgeDays(candidate.eligible_since)} days`} />
-          <Metric label="Managed files" value={candidate.file_count} />
-          <Metric label="Plex coverage" value={`${candidate.matched_file_count}/${candidate.file_count}`} />
+          <Metric label="Managed storage" value={formatBytes(result.total_size_bytes)} />
+          <Metric label="Managed files" value={result.total_file_count} />
+          <Metric label="Review ready" value={result.review_ready_file_count} />
+          <Metric label="Whole-copy deletion" value={result.deletion_eligible ? "Eligible" : "Blocked"} />
         </div>
         <Panel title="Decision evidence">
-          <div className="statusGrid">
-            <p>{candidate.reason}</p>
-            <div><strong>Requesters</strong><p>{candidate.requesters.join(", ")}</p></div>
-            <div><strong>Eligibility date</strong><p>{formatDateTime(candidate.eligible_since)}</p></div>
-            <div><strong>Play evidence</strong><p>No mapped Plex item has a play or last-viewed timestamp at or after the eligibility date.</p></div>
-          </div>
+          <div className="statusGrid"><p>{result.reason}</p><div><strong>Requesters</strong><p>{result.requesters.join(", ")}</p></div></div>
         </Panel>
-        <Panel title="Managed files">
-          <div className="retentionFileList">
-            {candidate.files?.map((file) => (
-              <div key={file.id}>
-                <div><strong>{file.filename || file.path.split("/").pop()}</strong><div className="path">{file.path}</div></div>
-                <div><Badge tone={file.match_status === "matched" ? "good" : "warn"}>{file.match_status}</Badge><div>{formatBytes(file.size_bytes)}</div></div>
-              </div>
-            ))}
-          </div>
-        </Panel>
+        {result.scopes.map((scope) => (
+          <Panel key={scope.id} title={retentionScopeLabel(scope)}>
+            <div className="statusGrid">
+              <div><Badge tone={scope.decision === "review_ready" ? "good" : scope.decision === "protected" ? "neutral" : "warn"}>{formatStatusLabel(scope.decision)}</Badge></div>
+              <p>{scope.reason}</p>
+              <p className="muted">Latest request {formatDateTime(scope.latest_request_at)} · {scope.review_ready_file_count} ready · {scope.waiting_file_count} waiting · {scope.protected_file_count} protected · {scope.attention_file_count} attention</p>
+            </div>
+            <div className="retentionFileList">
+              {scope.files?.map((file) => (
+                <div key={file.id}>
+                  <div><strong>{retentionFileLabel(file)}</strong><div className="path">{file.path}</div><div className="muted">{file.reason}</div></div>
+                  <div><Badge tone={file.decision === "review_ready" ? "good" : file.decision === "protected" ? "neutral" : "warn"}>{formatStatusLabel(file.decision)}</Badge><div>{formatBytes(file.size_bytes)}</div><div className="muted">Eligible {formatDateTime(file.eligible_since)}</div></div>
+                </div>
+              ))}
+              {!scope.files?.length && <p className="muted">No managed files were attributable to this scope.</p>}
+            </div>
+            {scope.available_actions.includes("transcode_plan") && <button className="primary" onClick={() => onTranscode(result, scope.id)}>Create scoped transcode plan</button>}
+          </Panel>
+        ))}
         <Panel title="Request history">
           <div className="compactList">
-            {candidate.requests.map((request, index) => (
+            {result.requests.map((request, index) => (
               <div key={`${request.id}-${index}`}><strong>{request.requester}</strong><span>{formatDateTime(request.created_at)}{request.is_4k ? " · 4K" : ""}</span></div>
             ))}
           </div>
         </Panel>
         <div className="rowActions retentionDrawerActions">
-          {candidate.available_actions.includes("transcode_plan") && <button className="primary" onClick={() => onTranscode(candidate)}>Create transcode plan</button>}
-          {candidate.available_actions.includes("delete") && <button className="danger" onClick={() => onDelete(candidate)}>Delete through {candidate.service_type}</button>}
+          {result.available_actions.includes("delete") && <button className="danger" onClick={() => onDelete(result)}>Delete whole copy through {result.service_type}</button>}
         </div>
       </aside>
     </div>
@@ -1447,26 +1470,28 @@ function RetentionDetailDrawer({
 }
 
 function RetentionTranscodeDialog({
-  candidate,
+  result,
+  scope,
   profiles,
   onClose,
   onCreated,
   onToast
 }: {
-  candidate: RetentionCandidate;
+  result: RetentionReviewResult;
+  scope: RetentionReviewScope;
   profiles: TranscodeProfile[];
   onClose: () => void;
   onCreated: (planId: number) => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  const eligibleFiles = (candidate.files || []).filter((file) => file.media_atlas_file_id);
+  const eligibleFiles = (scope.files || []).filter((file) => file.planning_eligible && file.media_atlas_file_id);
   const preferred = eligibleFiles.filter((file) => isPlannerCategory(file.recommendation_category));
   const availableCategories = plannerCategories.filter((item) => preferred.some((file) => file.recommendation_category === item));
   const initialCategory = availableCategories[0] || "Review";
   const [category, setCategory] = useState<PlannerCategory>(initialCategory);
   const categoryFiles = preferred.filter((file) => file.recommendation_category === category);
   const [profileId, setProfileId] = useState(defaultProfileId(profiles, initialCategory));
-  const [name, setName] = useState(`Retention review: ${candidate.title}`);
+  const [name, setName] = useState(`Retention review: ${result.title}${scope.scope_type === "season" ? ` S${String(scope.season_number).padStart(2, "0")}` : ""}`);
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(
     new Set(preferred.filter((file) => file.recommendation_category === initialCategory).map((file) => Number(file.media_atlas_file_id)))
   );
@@ -1489,11 +1514,11 @@ function RetentionTranscodeDialog({
 
   async function submit() {
     try {
-      const result = await api<{ plan: TranscodePlan }>(`/api/retention/candidates/${candidate.id}/transcode-plan`, {
+      const response = await api<{ plan: TranscodePlan }>(`/api/retention/results/${result.id}/scopes/${scope.id}/transcode-plan`, {
         method: "POST",
         body: JSON.stringify({ profile_id: profileId, name, file_ids: Array.from(selectedFiles) })
       });
-      await onCreated(result.plan.id);
+      await onCreated(response.plan.id);
     } catch (error) {
       onToast(String(error));
     }
@@ -1502,7 +1527,7 @@ function RetentionTranscodeDialog({
   return (
     <div className="dialogBackdrop" onClick={onClose}>
       <section className="dialogPanel" role="dialog" aria-modal="true" aria-labelledby="retention-transcode-title" onClick={(event) => event.stopPropagation()}>
-        <div className="drawerHeader"><div><h2 id="retention-transcode-title">Create transcode plan</h2><p className="muted">{candidate.title} · creating this plan does not start a transcode.</p></div><button onClick={onClose}>Close</button></div>
+        <div className="drawerHeader"><div><h2 id="retention-transcode-title">Create transcode plan</h2><p className="muted">{result.title} · {retentionScopeLabel(scope)} · creating this plan does not start a transcode.</p></div><button onClick={onClose}>Close</button></div>
         {availableCategories.length > 0 && (
           <div className="tabs">
             {availableCategories.map((item) => <button key={item} className={category === item ? "active" : ""} onClick={() => changeCategory(item)}>{item}</button>)}
@@ -1519,7 +1544,7 @@ function RetentionTranscodeDialog({
           {categoryFiles.map((file) => (
             <label className="checkRow" key={file.id}>
               <input type="checkbox" checked={selectedFiles.has(Number(file.media_atlas_file_id))} onChange={() => toggle(Number(file.media_atlas_file_id))} />
-              <span><strong>{file.filename || file.path}</strong><span className="muted">{file.recommendation_category || "Uncategorized"} · {formatBytes(file.size_bytes)}</span></span>
+              <span><strong>{retentionFileLabel(file)}</strong><span className="muted">{file.recommendation_category || "Uncategorized"} · {formatBytes(file.size_bytes)}</span></span>
             </label>
           ))}
         </div>
@@ -1528,6 +1553,16 @@ function RetentionTranscodeDialog({
       </section>
     </div>
   );
+}
+
+function retentionScopeLabel(scope: RetentionReviewScope): string {
+  if (scope.scope_type === "season") return scope.season_number === 0 ? "Specials" : `Season ${scope.season_number}`;
+  return scope.scope_type === "movie" ? "Movie" : "Whole-series fallback";
+}
+
+function retentionFileLabel(file: RetentionReviewFile): string {
+  const pathName = file.path.split(/[\\/]/).filter(Boolean).pop();
+  return pathName || file.filename || "Unknown file";
 }
 
 function Reports() {
@@ -3609,12 +3644,12 @@ function CompactList({ rows, primary, secondary }: { rows: any[]; primary: strin
   );
 }
 
-function Pager({ page, total, pageSize, onPage }: { page: number; total: number; pageSize: number; onPage: (page: number) => void }) {
+function Pager({ page, total, pageSize, onPage, itemLabel = "files" }: { page: number; total: number; pageSize: number; onPage: (page: number) => void; itemLabel?: string }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
     <div className="pager">
       <button disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
-      <span>Page {page} of {pages} ({total} files)</span>
+      <span>Page {page} of {pages} ({total} {itemLabel})</span>
       <button disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
     </div>
   );

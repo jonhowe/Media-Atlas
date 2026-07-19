@@ -52,6 +52,7 @@ from .services.media_retention import (
     MediaRetentionManager,
     candidate_export_rows,
     create_candidate_transcode_plan,
+    create_review_scope_transcode_plan,
     create_connection as create_retention_connection,
     delete_candidate as delete_retention_candidate,
     delete_connection as delete_retention_connection,
@@ -60,8 +61,11 @@ from .services.media_retention import (
     list_analysis_jobs as list_retention_analysis_jobs,
     list_candidates as list_retention_candidates,
     list_connections as list_retention_connections,
+    list_review_results,
     read_analysis_job as read_retention_analysis_job,
     read_candidate as read_retention_candidate,
+    read_review_result,
+    review_result_export_rows,
     retention_summary,
     retry_seerr_reconciliation,
     save_settings as save_media_retention_settings,
@@ -578,6 +582,57 @@ async def retry_retention_analysis(job_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/retention/results")
+async def get_retention_results(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+    decision: str | None = "review_ready",
+    media_type: str | None = None,
+    connection_id: int | None = None,
+    query: str | None = None,
+    sort: str = "total_size_bytes",
+    direction: str = "desc",
+) -> dict[str, Any]:
+    return list_review_results(
+        page=page,
+        page_size=page_size,
+        decision=decision,
+        media_type=media_type,
+        connection_id=connection_id,
+        query=query,
+        sort=sort,
+        direction=direction,
+    )
+
+
+@app.get("/api/retention/results/{result_id}")
+async def get_retention_result(result_id: int) -> dict[str, Any]:
+    result = read_review_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Retention result not found.")
+    return result
+
+
+@app.post("/api/retention/results/{result_id}/scopes/{scope_id}/transcode-plan")
+async def create_retention_scope_transcode_plan(
+    result_id: int,
+    scope_id: int,
+    payload: RetentionTranscodePlanCreate,
+    request: Request,
+) -> dict[str, Any]:
+    try:
+        return create_review_scope_transcode_plan(
+            result_id,
+            scope_id,
+            payload.profile_id,
+            payload.file_ids,
+            payload.name,
+            authenticated_user(request),
+        )
+    except MediaRetentionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/retention/candidates")
 async def get_retention_candidates(
     page: int = Query(default=1, ge=1),
@@ -660,6 +715,11 @@ async def retry_retention_seerr(action_id: int, request: Request) -> dict[str, A
 @app.get("/api/retention/retention-candidates.csv")
 async def export_retention_candidates() -> Response:
     return _csv_response("retention-candidates.csv", candidate_export_rows())
+
+
+@app.get("/api/retention/retention-results.csv")
+async def export_retention_results() -> Response:
+    return _csv_response("retention-results.csv", review_result_export_rows())
 
 
 @app.get("/api/roots")
@@ -985,6 +1045,8 @@ async def export_csv(export_name: str) -> Response:
         rows = db.query_all("SELECT * FROM files ORDER BY size_bytes DESC LIMIT 500")
     elif export_name == "retention-candidates.csv":
         rows = candidate_export_rows()
+    elif export_name == "retention-results.csv":
+        rows = review_result_export_rows()
     else:
         raise HTTPException(status_code=404, detail="Export not found.")
     return _csv_response(export_name, rows)
