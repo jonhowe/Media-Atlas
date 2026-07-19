@@ -38,13 +38,15 @@ export type AuthStatus = {
   trusted_user_header?: string | null;
 };
 
+export type VersionStatus = {
+  version: string;
+  git_sha: string;
+  build_date: string;
+  image_tag: string;
+};
+
 export type AdminStatus = {
-  version: {
-    version: string;
-    git_sha: string;
-    build_date: string;
-    image_tag: string;
-  };
+  version: VersionStatus;
   readiness: ReadinessStatus;
   auth: Record<string, unknown>;
   runtime_config: {

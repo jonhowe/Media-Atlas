@@ -75,15 +75,28 @@ jobs:
           load: true
           tags: media-atlas:pre-publish
           build-args: |
+            MEDIA_ATLAS_VERSION=${{ github.event.release.tag_name }}
             MEDIA_ATLAS_GIT_SHA=${{ github.sha }}
             MEDIA_ATLAS_BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
             MEDIA_ATLAS_IMAGE_TAG=${{ github.event.release.tag_name }}
           cache-from: type=gha,scope=media-atlas
 
       - name: Smoke test image internals
+        env:
+          EXPECTED_VERSION: ${{ github.event.release.tag_name }}
         run: |
           docker run --rm media-atlas:pre-publish \
             bash -c "which ffmpeg && which ffprobe && which vainfo && test -f /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so && test \"\$LIBVA_DRIVER_NAME\" = iHD && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
+          docker run --rm -e EXPECTED_VERSION media-atlas:pre-publish \
+            python -c "import os; from app.config import CONFIG; assert CONFIG.version.version == os.environ['EXPECTED_VERSION']"
+          docker run --rm \
+            -e EXPECTED_VERSION \
+            -e MEDIA_ATLAS_AUTH_MODE=disabled \
+            -e MEDIA_ATLAS_HOST=127.0.0.1 \
+            -e MEDIA_ATLAS_LOG_RETENTION_DAYS=0 \
+            -e MEDIA_ATLAS_READINESS_MIN_FREE_BYTES=0 \
+            media-atlas:pre-publish \
+            python -c "import os; from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); client.__enter__(); expected = os.environ['EXPECTED_VERSION']; assert client.get('/api/version').json()['version'] == expected; assert client.get('/api/admin/status').json()['version']['version'] == expected; client.__exit__(None, None, None)"
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
@@ -103,6 +116,7 @@ jobs:
           push: true
           tags: ${{ steps.vars.outputs.tags }}
           build-args: |
+            MEDIA_ATLAS_VERSION=${{ github.event.release.tag_name }}
             MEDIA_ATLAS_GIT_SHA=${{ github.sha }}
             MEDIA_ATLAS_BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
             MEDIA_ATLAS_IMAGE_TAG=${{ github.event.release.tag_name }}

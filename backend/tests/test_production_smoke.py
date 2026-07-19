@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +24,10 @@ class ProductionSmokeTest(unittest.TestCase):
                     "MEDIA_ATLAS_LOGS_DIR": f"{temp_dir}/logs",
                     "MEDIA_ATLAS_TRANSCODE_STAGING_DIR": f"{temp_dir}/staging",
                     "MEDIA_ATLAS_AUTH_MODE": "disabled",
+                    "MEDIA_ATLAS_VERSION": "v9.8.7-test",
+                    "MEDIA_ATLAS_GIT_SHA": "0123456789abcdef",
+                    "MEDIA_ATLAS_BUILD_DATE": "2026-07-18T12:00:00Z",
+                    "MEDIA_ATLAS_IMAGE_TAG": "v9.8.7-test",
                 }
             )
             from fastapi.testclient import TestClient
@@ -357,6 +362,42 @@ class ProductionSmokeTest(unittest.TestCase):
                 self.assertEqual(auth.status_code, 200)
                 self.assertTrue(auth.json()["authenticated"])
 
+                version = client.get("/api/version")
+                self.assertEqual(version.status_code, 200)
+                self.assertEqual(
+                    version.json(),
+                    {
+                        "version": "v9.8.7-test",
+                        "git_sha": "0123456789abcdef",
+                        "build_date": "2026-07-18T12:00:00Z",
+                        "image_tag": "v9.8.7-test",
+                    },
+                )
+
+                original_auth = CONFIG.auth
+                object.__setattr__(
+                    CONFIG,
+                    "auth",
+                    replace(
+                        original_auth,
+                        mode="single_admin",
+                        admin_password="docs-test-password",
+                        session_secret="docs-test-session-secret",
+                    ),
+                )
+                try:
+                    unauthenticated_version = client.get("/api/version")
+                    self.assertEqual(unauthenticated_version.status_code, 401)
+                    login_response = client.post(
+                        "/api/auth/login",
+                        json={"username": original_auth.admin_username, "password": "docs-test-password"},
+                    )
+                    self.assertEqual(login_response.status_code, 200)
+                    authenticated_version = client.get("/api/version")
+                    self.assertEqual(authenticated_version.status_code, 200)
+                finally:
+                    object.__setattr__(CONFIG, "auth", original_auth)
+
                 application_logs = client.get("/api/logs/application", params={"logger": "media_atlas", "limit": 50})
                 self.assertEqual(application_logs.status_code, 200)
                 self.assertTrue(application_logs.json()["items"])
@@ -415,7 +456,7 @@ class ProductionSmokeTest(unittest.TestCase):
                     set(runtime_config["operations"]),
                     {"acknowledge_auth_disabled_lan", "fail_unsafe_bind", "allowed_origins"},
                 )
-                self.assertEqual(admin_status.json()["version"]["version"], "0.1.0")
+                self.assertEqual(admin_status.json()["version"]["version"], "v9.8.7-test")
 
                 diagnostics = client.get("/api/admin/diagnostics")
                 self.assertEqual(diagnostics.status_code, 200)

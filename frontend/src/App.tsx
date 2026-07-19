@@ -28,7 +28,8 @@ import type {
   TranscodeProfile,
   TranscodeRun,
   TranscodeRunItem,
-  TranscodeSavingsStats
+  TranscodeSavingsStats,
+  VersionStatus
 } from "./types";
 
 type Page =
@@ -120,6 +121,8 @@ export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [plannerCategory, setPlannerCategory] = useState<PlannerCategory>("Easy Win");
   const [logTarget, setLogTarget] = useState<LogTarget>({ tab: "application" });
+  const [version, setVersion] = useState<VersionStatus | null>(null);
+  const [versionLoaded, setVersionLoaded] = useState(false);
 
   useEffect(() => {
     refreshAuth();
@@ -133,6 +136,30 @@ export default function App() {
       // Theme still applies for this session when storage is unavailable.
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (!auth?.authenticated) {
+      setVersion(null);
+      setVersionLoaded(false);
+      return;
+    }
+    let active = true;
+    setVersion(null);
+    setVersionLoaded(false);
+    api<VersionStatus>("/api/version")
+      .then((nextVersion) => {
+        if (active) setVersion(nextVersion);
+      })
+      .catch(() => {
+        if (active) setVersion(null);
+      })
+      .finally(() => {
+        if (active) setVersionLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [auth?.authenticated]);
 
   useEffect(() => {
     if (!auth?.authenticated || !auth.configured) return;
@@ -233,6 +260,10 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <div className="sidebarVersion" aria-live="polite">
+          <span>Version</span>
+          <strong>{version?.version || (versionLoaded ? "unavailable" : "loading…")}</strong>
+        </div>
       </aside>
       <main>
         <header className="topbar">

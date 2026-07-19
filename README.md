@@ -23,6 +23,10 @@ Media Atlas stages transcode output separately from originals by default. Replac
 - Close and reopen the browser while jobs continue, as long as the backend process remains running.
 - Manually publish verified staged outputs back to the original path after two confirmations.
 
+## Web UI Tour
+
+See the [Web UI visual tour](docs/WEB_UI.md) for a task-oriented walkthrough of the Dashboard, Library, retention review, planner, runs, scans, logs, reports, and Admin Status using reproducible synthetic data.
+
 ## Production Install
 
 Recommended install uses the published GHCR image. The host only needs Docker Compose and access to a local or mounted media directory.
