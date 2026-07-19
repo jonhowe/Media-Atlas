@@ -840,6 +840,193 @@ MIGRATIONS: list[tuple[str, str]] = [
           END;
         """,
     ),
+    (
+        "0009_retention_evaluation_ledger",
+        """
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN evaluated_title_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN review_ready_scope_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN waiting_scope_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN protected_scope_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN attention_scope_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE retention_analysis_jobs
+          ADD COLUMN review_ready_size_bytes INTEGER NOT NULL DEFAULT 0;
+
+        ALTER TABLE retention_candidate_files ADD COLUMN season_number INTEGER;
+
+        CREATE TABLE IF NOT EXISTS retention_review_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          analysis_job_id INTEGER NOT NULL REFERENCES retention_analysis_jobs(id) ON DELETE CASCADE,
+          candidate_id INTEGER REFERENCES retention_candidates(id) ON DELETE SET NULL,
+          connection_id INTEGER REFERENCES retention_connections(id),
+          result_key TEXT NOT NULL,
+          service_item_id INTEGER,
+          seerr_media_id INTEGER,
+          media_type TEXT NOT NULL CHECK(media_type IN ('movie', 'tv')),
+          title TEXT NOT NULL,
+          year INTEGER,
+          tmdb_id INTEGER,
+          tvdb_id INTEGER,
+          is_4k INTEGER NOT NULL DEFAULT 0,
+          requesters_json TEXT NOT NULL DEFAULT '[]',
+          requests_json TEXT NOT NULL DEFAULT '[]',
+          overall_decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          deletion_eligible INTEGER NOT NULL DEFAULT 0,
+          total_size_bytes INTEGER NOT NULL DEFAULT 0,
+          total_file_count INTEGER NOT NULL DEFAULT 0,
+          review_ready_file_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          UNIQUE(analysis_job_id, result_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_review_items_job_decision
+          ON retention_review_items(analysis_job_id, overall_decision);
+        CREATE INDEX IF NOT EXISTS idx_retention_review_items_connection
+          ON retention_review_items(connection_id, media_type);
+
+        CREATE TABLE IF NOT EXISTS retention_review_scopes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          review_item_id INTEGER NOT NULL REFERENCES retention_review_items(id) ON DELETE CASCADE,
+          scope_type TEXT NOT NULL CHECK(scope_type IN ('movie', 'season', 'series')),
+          season_number INTEGER,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          latest_request_at TEXT,
+          total_size_bytes INTEGER NOT NULL DEFAULT 0,
+          file_count INTEGER NOT NULL DEFAULT 0,
+          review_ready_file_count INTEGER NOT NULL DEFAULT 0,
+          waiting_file_count INTEGER NOT NULL DEFAULT 0,
+          protected_file_count INTEGER NOT NULL DEFAULT 0,
+          attention_file_count INTEGER NOT NULL DEFAULT 0,
+          planning_eligible_file_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_review_scopes_item
+          ON retention_review_scopes(review_item_id, season_number);
+        CREATE INDEX IF NOT EXISTS idx_retention_review_scopes_decision
+          ON retention_review_scopes(decision);
+
+        CREATE TABLE IF NOT EXISTS retention_review_files (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          review_scope_id INTEGER NOT NULL REFERENCES retention_review_scopes(id) ON DELETE CASCADE,
+          candidate_file_id INTEGER REFERENCES retention_candidate_files(id) ON DELETE SET NULL,
+          service_file_id INTEGER,
+          path TEXT NOT NULL DEFAULT '',
+          normalized_path TEXT NOT NULL DEFAULT '',
+          size_bytes INTEGER NOT NULL DEFAULT 0,
+          date_added TEXT,
+          eligible_since TEXT,
+          media_atlas_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+          plex_item_id INTEGER REFERENCES plex_items(id) ON DELETE SET NULL,
+          plex_rating_key TEXT,
+          match_status TEXT NOT NULL DEFAULT 'unmatched',
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          planning_eligible INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_retention_review_files_scope
+          ON retention_review_files(review_scope_id, decision);
+        CREATE INDEX IF NOT EXISTS idx_retention_review_files_inventory
+          ON retention_review_files(media_atlas_file_id, planning_eligible);
+
+        INSERT OR IGNORE INTO retention_review_items (
+          analysis_job_id, candidate_id, connection_id, result_key, service_item_id,
+          seerr_media_id, media_type, title, year, tmdb_id, tvdb_id, is_4k,
+          requesters_json, requests_json, overall_decision, reason, deletion_eligible,
+          total_size_bytes, total_file_count, review_ready_file_count, created_at
+        )
+        SELECT
+          rc.analysis_job_id, rc.id, rc.connection_id, 'legacy:' || rc.id, rc.service_item_id,
+          rc.seerr_media_id, rc.media_type, rc.title, rc.year, rc.tmdb_id, rc.tvdb_id, rc.is_4k,
+          rc.requesters_json, rc.requests_json,
+          CASE WHEN rc.status = 'active' THEN 'review_ready' ELSE 'needs_attention' END,
+          rc.reason, CASE WHEN rc.status = 'active' THEN 1 ELSE 0 END,
+          rc.size_bytes, rc.file_count,
+          CASE WHEN rc.status = 'active' THEN rc.matched_file_count ELSE 0 END,
+          rc.created_at
+        FROM retention_candidates rc;
+
+        INSERT INTO retention_review_scopes (
+          review_item_id, scope_type, season_number, decision, reason, latest_request_at,
+          total_size_bytes, file_count, review_ready_file_count, waiting_file_count,
+          protected_file_count, attention_file_count, planning_eligible_file_count, created_at
+        )
+        SELECT
+          rri.id, CASE WHEN rc.media_type = 'movie' THEN 'movie' ELSE 'series' END, NULL,
+          CASE WHEN rc.status = 'active' THEN 'review_ready' ELSE 'needs_attention' END,
+          rc.reason, rc.latest_request_at, rc.size_bytes, rc.file_count,
+          CASE WHEN rc.status = 'active' THEN rc.matched_file_count ELSE 0 END,
+          0, 0, CASE WHEN rc.status = 'diagnostic' THEN rc.file_count ELSE 0 END,
+          CASE WHEN rc.status = 'active' THEN (
+            SELECT COUNT(*)
+            FROM retention_candidate_files rcf2
+            JOIN files f2 ON f2.id = rcf2.media_atlas_file_id
+            WHERE rcf2.candidate_id = rc.id
+              AND f2.is_missing = 0
+              AND f2.recommendation_category IN ('Easy Win', 'Remux Only', 'Review')
+          ) ELSE 0 END,
+          rc.created_at
+        FROM retention_candidates rc
+        JOIN retention_review_items rri
+          ON rri.analysis_job_id = rc.analysis_job_id AND rri.candidate_id = rc.id;
+
+        INSERT INTO retention_review_files (
+          review_scope_id, candidate_file_id, service_file_id, path, normalized_path,
+          size_bytes, date_added, eligible_since, media_atlas_file_id, plex_item_id,
+          plex_rating_key, match_status, decision, reason, planning_eligible, created_at
+        )
+        SELECT
+          rrs.id, rcf.id, rcf.service_file_id, rcf.path, rcf.normalized_path,
+          rcf.size_bytes, rcf.date_added, rc.eligible_since, rcf.media_atlas_file_id,
+          rcf.plex_item_id, rcf.plex_rating_key, rcf.match_status,
+          CASE
+            WHEN rc.status = 'active' AND rcf.match_status = 'matched' THEN 'review_ready'
+            ELSE 'needs_attention'
+          END,
+          rc.reason,
+          CASE WHEN rc.status = 'active' AND EXISTS (
+            SELECT 1 FROM files f2
+            WHERE f2.id = rcf.media_atlas_file_id
+              AND f2.is_missing = 0
+              AND f2.recommendation_category IN ('Easy Win', 'Remux Only', 'Review')
+          ) THEN 1 ELSE 0 END,
+          rc.created_at
+        FROM retention_candidate_files rcf
+        JOIN retention_candidates rc ON rc.id = rcf.candidate_id
+        JOIN retention_review_items rri ON rri.candidate_id = rc.id
+        JOIN retention_review_scopes rrs ON rrs.review_item_id = rri.id;
+
+        UPDATE retention_analysis_jobs
+        SET evaluated_title_count = (
+              SELECT COUNT(*) FROM retention_review_items rri
+              WHERE rri.analysis_job_id = retention_analysis_jobs.id
+            ),
+            review_ready_scope_count = (
+              SELECT COUNT(*) FROM retention_review_scopes rrs
+              JOIN retention_review_items rri ON rri.id = rrs.review_item_id
+              WHERE rri.analysis_job_id = retention_analysis_jobs.id
+                AND rrs.decision = 'review_ready'
+            ),
+            attention_scope_count = (
+              SELECT COUNT(*) FROM retention_review_scopes rrs
+              JOIN retention_review_items rri ON rri.id = rrs.review_item_id
+              WHERE rri.analysis_job_id = retention_analysis_jobs.id
+                AND rrs.decision = 'needs_attention'
+            ),
+            review_ready_size_bytes = (
+              SELECT COALESCE(SUM(rrf.size_bytes), 0) FROM retention_review_files rrf
+              JOIN retention_review_scopes rrs ON rrs.id = rrf.review_scope_id
+              JOIN retention_review_items rri ON rri.id = rrs.review_item_id
+              WHERE rri.analysis_job_id = retention_analysis_jobs.id
+                AND rrf.decision = 'review_ready'
+            );
+        """,
+    ),
 ]
 
 
