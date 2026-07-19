@@ -259,7 +259,7 @@ async def application_logs(
 
 
 @app.get("/api/health")
-async def health() -> dict[str, Any]:
+def health() -> dict[str, Any]:
     status = readiness_status()
     return {
         "status": status["status"],
@@ -276,28 +276,28 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/health/live")
-async def health_live() -> dict[str, Any]:
+def health_live() -> dict[str, Any]:
     return live_status()
 
 
 @app.get("/api/health/ready")
-async def health_ready() -> Response:
+def health_ready() -> Response:
     status = readiness_status()
     return JSONResponse(status, status_code=200 if status["ok"] else 503)
 
 
 @app.get("/api/version")
-async def version() -> dict[str, Any]:
+def version() -> dict[str, Any]:
     return version_status()
 
 
 @app.get("/api/auth/me")
-async def auth_me(request: Request) -> dict[str, Any]:
+def auth_me(request: Request) -> dict[str, Any]:
     return auth_status(request)
 
 
 @app.post("/api/auth/login")
-async def auth_login(payload: LoginRequest, request: Request) -> Response:
+def auth_login(payload: LoginRequest, request: Request) -> Response:
     try:
         client = request.client.host if request.client else "unknown"
         session = login(payload.username, payload.password, client)
@@ -309,14 +309,14 @@ async def auth_login(payload: LoginRequest, request: Request) -> Response:
 
 
 @app.post("/api/auth/logout")
-async def auth_logout() -> Response:
+def auth_logout() -> Response:
     response = JSONResponse({"authenticated": False})
     clear_session_cookie(response)
     return response
 
 
 @app.get("/api/settings")
-async def settings() -> dict[str, Any]:
+def settings() -> dict[str, Any]:
     return {
         "host": CONFIG.host,
         "port": CONFIG.port,
@@ -348,12 +348,12 @@ async def settings() -> dict[str, Any]:
 
 
 @app.get("/api/admin/status")
-async def get_admin_status() -> dict[str, Any]:
+def get_admin_status() -> dict[str, Any]:
     return admin_status()
 
 
 @app.get("/api/admin/diagnostics")
-async def get_admin_diagnostics() -> Response:
+def get_admin_diagnostics() -> Response:
     return JSONResponse(
         diagnostics_status(),
         headers={"Content-Disposition": 'attachment; filename="media-atlas-diagnostics.json"'},
@@ -361,12 +361,12 @@ async def get_admin_diagnostics() -> Response:
 
 
 @app.get("/api/admin/stats")
-async def get_admin_stats() -> dict[str, Any]:
+def get_admin_stats() -> dict[str, Any]:
     return metrics_status()
 
 
 @app.get("/api/admin/database-backup")
-async def download_database_backup() -> FileResponse:
+def download_database_backup() -> FileResponse:
     backup_path = db.create_database_backup()
     return FileResponse(
         backup_path,
@@ -376,17 +376,17 @@ async def download_database_backup() -> FileResponse:
 
 
 @app.post("/api/admin/retention/run")
-async def run_retention() -> dict[str, Any]:
+def run_retention() -> dict[str, Any]:
     return apply_retention()
 
 
 @app.get("/api/plex/settings")
-async def plex_settings() -> dict[str, Any]:
+def plex_settings() -> dict[str, Any]:
     return get_plex_settings(include_secret=False)
 
 
 @app.put("/api/plex/settings")
-async def update_plex_settings(payload: PlexSettingsUpdate) -> dict[str, Any]:
+def update_plex_settings(payload: PlexSettingsUpdate) -> dict[str, Any]:
     data = payload.model_dump(exclude_unset=True)
     return save_plex_settings(data)
 
@@ -400,7 +400,7 @@ async def test_plex_connection() -> dict[str, Any]:
 
 
 @app.get("/api/plex/status")
-async def plex_status() -> dict[str, Any]:
+def plex_status() -> dict[str, Any]:
     return plex_status_summary()
 
 
@@ -423,12 +423,12 @@ async def start_plex_sync() -> dict[str, Any]:
 
 
 @app.get("/api/plex/sync-jobs")
-async def get_plex_sync_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+def get_plex_sync_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
     return list_plex_sync_jobs(limit)
 
 
 @app.get("/api/plex/sync-jobs/{job_id}")
-async def get_plex_sync_job(job_id: int) -> dict[str, Any]:
+def get_plex_sync_job(job_id: int) -> dict[str, Any]:
     job = read_plex_sync_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Plex sync job not found.")
@@ -452,9 +452,9 @@ async def plex_sync_events(job_id: int) -> StreamingResponse:
 
 
 @app.post("/api/plex/sync-jobs/{job_id}/cancel")
-async def cancel_plex_sync(job_id: int) -> dict[str, Any]:
+def cancel_plex_sync(job_id: int) -> dict[str, Any]:
     plex_manager.cancel_sync(job_id)
-    return await get_plex_sync_job(job_id)
+    return get_plex_sync_job(job_id)
 
 
 @app.post("/api/plex/sync-jobs/{job_id}/retry")
@@ -466,17 +466,17 @@ async def retry_plex_sync(job_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/plex/unmatched")
-async def get_plex_unmatched(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
+def get_plex_unmatched(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
     return plex_unmatched(limit)
 
 
 @app.get("/api/retention/settings")
-async def media_retention_settings() -> dict[str, Any]:
+def media_retention_settings() -> dict[str, Any]:
     return get_media_retention_settings()
 
 
 @app.put("/api/retention/settings")
-async def update_media_retention_settings(payload: RetentionSettingsUpdate) -> dict[str, Any]:
+def update_media_retention_settings(payload: RetentionSettingsUpdate) -> dict[str, Any]:
     try:
         return save_media_retention_settings(payload.model_dump(exclude_unset=True))
     except MediaRetentionError as exc:
@@ -484,12 +484,12 @@ async def update_media_retention_settings(payload: RetentionSettingsUpdate) -> d
 
 
 @app.get("/api/retention/connections")
-async def get_retention_connections() -> list[dict[str, Any]]:
+def get_retention_connections() -> list[dict[str, Any]]:
     return list_retention_connections()
 
 
 @app.post("/api/retention/connections")
-async def add_retention_connection(payload: RetentionConnectionCreate) -> dict[str, Any]:
+def add_retention_connection(payload: RetentionConnectionCreate) -> dict[str, Any]:
     try:
         return create_retention_connection(payload.model_dump())
     except MediaRetentionError as exc:
@@ -497,7 +497,7 @@ async def add_retention_connection(payload: RetentionConnectionCreate) -> dict[s
 
 
 @app.patch("/api/retention/connections/{connection_id}")
-async def patch_retention_connection(
+def patch_retention_connection(
     connection_id: int, payload: RetentionConnectionUpdate
 ) -> dict[str, Any]:
     try:
@@ -507,7 +507,7 @@ async def patch_retention_connection(
 
 
 @app.delete("/api/retention/connections/{connection_id}")
-async def remove_retention_connection(connection_id: int) -> dict[str, Any]:
+def remove_retention_connection(connection_id: int) -> dict[str, Any]:
     try:
         delete_retention_connection(connection_id)
         return {"deleted": True, "id": connection_id}
@@ -524,7 +524,7 @@ async def test_retention_connection(connection_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/retention/summary")
-async def get_retention_summary() -> dict[str, Any]:
+def get_retention_summary() -> dict[str, Any]:
     return retention_summary()
 
 
@@ -537,12 +537,12 @@ async def start_retention_analysis() -> dict[str, Any]:
 
 
 @app.get("/api/retention/analyses")
-async def get_retention_analyses(limit: int = Query(default=30, ge=1, le=200)) -> list[dict[str, Any]]:
+def get_retention_analyses(limit: int = Query(default=30, ge=1, le=200)) -> list[dict[str, Any]]:
     return list_retention_analysis_jobs(limit)
 
 
 @app.get("/api/retention/analyses/{job_id}")
-async def get_retention_analysis(job_id: int) -> dict[str, Any]:
+def get_retention_analysis(job_id: int) -> dict[str, Any]:
     job = read_retention_analysis_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Retention analysis job not found.")
@@ -571,7 +571,7 @@ async def cancel_retention_analysis(job_id: int) -> dict[str, Any]:
         media_retention_manager.cancel_analysis(job_id)
     except MediaRetentionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return await get_retention_analysis(job_id)
+    return await asyncio.to_thread(get_retention_analysis, job_id)
 
 
 @app.post("/api/retention/analyses/{job_id}/retry")
@@ -583,7 +583,7 @@ async def retry_retention_analysis(job_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/retention/results")
-async def get_retention_results(
+def get_retention_results(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     decision: str | None = "review_ready",
@@ -606,7 +606,7 @@ async def get_retention_results(
 
 
 @app.get("/api/retention/results/{result_id}")
-async def get_retention_result(result_id: int) -> dict[str, Any]:
+def get_retention_result(result_id: int) -> dict[str, Any]:
     result = read_review_result(result_id)
     if not result:
         raise HTTPException(status_code=404, detail="Retention result not found.")
@@ -614,7 +614,7 @@ async def get_retention_result(result_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/retention/results/{result_id}/scopes/{scope_id}/transcode-plan")
-async def create_retention_scope_transcode_plan(
+def create_retention_scope_transcode_plan(
     result_id: int,
     scope_id: int,
     payload: RetentionTranscodePlanCreate,
@@ -634,7 +634,7 @@ async def create_retention_scope_transcode_plan(
 
 
 @app.get("/api/retention/candidates")
-async def get_retention_candidates(
+def get_retention_candidates(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     status: str | None = None,
@@ -657,7 +657,7 @@ async def get_retention_candidates(
 
 
 @app.get("/api/retention/candidates/{candidate_id}")
-async def get_retention_candidate(candidate_id: int) -> dict[str, Any]:
+def get_retention_candidate(candidate_id: int) -> dict[str, Any]:
     candidate = read_retention_candidate(candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Retention candidate not found.")
@@ -665,7 +665,7 @@ async def get_retention_candidate(candidate_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/retention/candidates/{candidate_id}/transcode-plan")
-async def create_retention_transcode_plan(
+def create_retention_transcode_plan(
     candidate_id: int, payload: RetentionTranscodePlanCreate, request: Request
 ) -> dict[str, Any]:
     try:
@@ -698,7 +698,7 @@ async def remove_retention_candidate(
 
 
 @app.get("/api/retention/actions")
-async def get_retention_actions(
+def get_retention_actions(
     limit: int = Query(default=100, ge=1, le=500), candidate_id: int | None = None
 ) -> list[dict[str, Any]]:
     return list_retention_actions(limit, candidate_id)
@@ -713,22 +713,22 @@ async def retry_retention_seerr(action_id: int, request: Request) -> dict[str, A
 
 
 @app.get("/api/retention/retention-candidates.csv")
-async def export_retention_candidates() -> Response:
+def export_retention_candidates() -> Response:
     return _csv_response("retention-candidates.csv", candidate_export_rows())
 
 
 @app.get("/api/retention/retention-results.csv")
-async def export_retention_results() -> Response:
+def export_retention_results() -> Response:
     return _csv_response("retention-results.csv", review_result_export_rows())
 
 
 @app.get("/api/roots")
-async def list_roots() -> list[dict[str, Any]]:
+def list_roots() -> list[dict[str, Any]]:
     return [_inflate_root(row) for row in db.query_all("SELECT * FROM media_roots ORDER BY name")]
 
 
 @app.post("/api/roots")
-async def create_root(payload: RootCreate) -> dict[str, Any]:
+def create_root(payload: RootCreate) -> dict[str, Any]:
     try:
         path = resolve_existing_directory(payload.path)
     except ValueError as exc:
@@ -761,7 +761,7 @@ async def create_root(payload: RootCreate) -> dict[str, Any]:
 
 
 @app.patch("/api/roots/{root_id}")
-async def update_root(root_id: int, payload: RootUpdate) -> dict[str, Any]:
+def update_root(root_id: int, payload: RootUpdate) -> dict[str, Any]:
     root = db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,))
     if not root:
         raise HTTPException(status_code=404, detail="Root not found.")
@@ -791,7 +791,7 @@ async def update_root(root_id: int, payload: RootUpdate) -> dict[str, Any]:
 
 
 @app.delete("/api/roots/{root_id}")
-async def delete_root(root_id: int) -> dict[str, Any]:
+def delete_root(root_id: int) -> dict[str, Any]:
     root = db.query_one("SELECT * FROM media_roots WHERE id = ?", (root_id,))
     if not root:
         raise HTTPException(status_code=404, detail="Root not found.")
@@ -806,7 +806,7 @@ async def delete_root(root_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/directory-browser")
-async def directory_browser(path: str | None = None) -> dict[str, Any]:
+def directory_browser(path: str | None = None) -> dict[str, Any]:
     if not CONFIG.directory_browser_enabled:
         raise HTTPException(status_code=404, detail="Directory browser is disabled.")
     requested = Path(path).expanduser().resolve() if path else CONFIG.allowed_browse_roots[0]
@@ -836,12 +836,12 @@ async def start_scan() -> dict[str, Any]:
 
 
 @app.get("/api/scans")
-async def list_scans(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+def list_scans(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
     return db.query_all("SELECT * FROM scan_jobs ORDER BY id DESC LIMIT ?", (limit,))
 
 
 @app.get("/api/scans/{scan_id}")
-async def get_scan(scan_id: int) -> dict[str, Any]:
+def get_scan(scan_id: int) -> dict[str, Any]:
     scan = db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,))
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found.")
@@ -850,7 +850,7 @@ async def get_scan(scan_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/scans/{scan_id}/cancel")
-async def cancel_scan(scan_id: int) -> dict[str, Any]:
+def cancel_scan(scan_id: int) -> dict[str, Any]:
     scan_manager.cancel_scan(scan_id)
     return db.query_one("SELECT * FROM scan_jobs WHERE id = ?", (scan_id,)) or {"id": scan_id}
 
@@ -880,7 +880,7 @@ async def scan_events(scan_id: int) -> StreamingResponse:
 
 
 @app.get("/api/media")
-async def list_media(
+def list_media(
     query: str | None = None,
     root_id: int | None = None,
     extension: str | None = None,
@@ -942,7 +942,7 @@ async def list_media(
 
 
 @app.get("/api/media/{file_id}")
-async def get_media(file_id: int) -> dict[str, Any]:
+def get_media(file_id: int) -> dict[str, Any]:
     row = db.query_one(
         f"""
         SELECT f.*, r.name AS root_name, {plex_select_columns()}
@@ -962,7 +962,7 @@ async def get_media(file_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/reports/summary")
-async def report_summary() -> dict[str, Any]:
+def report_summary() -> dict[str, Any]:
     totals = db.query_one(
         """
         SELECT COUNT(*) AS total_files,
@@ -992,7 +992,7 @@ async def report_summary() -> dict[str, Any]:
 
 
 @app.get("/api/reports/{report_name}")
-async def named_report(report_name: str) -> dict[str, Any]:
+def named_report(report_name: str) -> dict[str, Any]:
     mapping = {
         "video-codecs": "primary_video_codec",
         "containers": "container",
@@ -1022,7 +1022,7 @@ async def named_report(report_name: str) -> dict[str, Any]:
 
 
 @app.get("/api/exports/{export_name}")
-async def export_csv(export_name: str) -> Response:
+def export_csv(export_name: str) -> Response:
     if export_name == "all-files.csv":
         rows = db.query_all("SELECT * FROM files ORDER BY path")
     elif export_name == "transcode-candidates.csv":
@@ -1053,12 +1053,12 @@ async def export_csv(export_name: str) -> Response:
 
 
 @app.get("/api/transcode-profiles")
-async def transcode_profiles() -> list[dict[str, Any]]:
+def transcode_profiles() -> list[dict[str, Any]]:
     return db.query_all("SELECT * FROM transcode_profiles ORDER BY id")
 
 
 @app.post("/api/transcode-plans")
-async def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
+def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
     try:
         return create_plan(payload.name, payload.profile_id, payload.file_ids, payload.notes)
     except ValueError as exc:
@@ -1066,7 +1066,7 @@ async def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-plans")
-async def list_transcode_plans(include_archived: bool = False) -> list[dict[str, Any]]:
+def list_transcode_plans(include_archived: bool = False) -> list[dict[str, Any]]:
     archive_filter = "" if include_archived else "WHERE tp.archived_at IS NULL"
     plans = db.query_all(
         f"""
@@ -1109,7 +1109,7 @@ async def list_transcode_plans(include_archived: bool = False) -> list[dict[str,
 
 
 @app.post("/api/transcode-plans/{plan_id}/archive")
-async def archive_transcode_plan(plan_id: int) -> dict[str, Any]:
+def archive_transcode_plan(plan_id: int) -> dict[str, Any]:
     plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
     if not plan:
         raise HTTPException(status_code=404, detail="Transcode plan not found.")
@@ -1117,11 +1117,11 @@ async def archive_transcode_plan(plan_id: int) -> dict[str, Any]:
         "UPDATE transcode_plans SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?",
         (db.utc_now(), db.utc_now(), plan_id),
     )
-    return await read_transcode_plan(plan_id)
+    return read_transcode_plan(plan_id)
 
 
 @app.post("/api/transcode-plans/{plan_id}/unarchive")
-async def unarchive_transcode_plan(plan_id: int) -> dict[str, Any]:
+def unarchive_transcode_plan(plan_id: int) -> dict[str, Any]:
     plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
     if not plan:
         raise HTTPException(status_code=404, detail="Transcode plan not found.")
@@ -1129,11 +1129,11 @@ async def unarchive_transcode_plan(plan_id: int) -> dict[str, Any]:
         "UPDATE transcode_plans SET archived_at = NULL, updated_at = ? WHERE id = ?",
         (db.utc_now(), plan_id),
     )
-    return await read_transcode_plan(plan_id)
+    return read_transcode_plan(plan_id)
 
 
 @app.delete("/api/transcode-plans/{plan_id}")
-async def delete_transcode_plan(plan_id: int) -> dict[str, Any]:
+def delete_transcode_plan(plan_id: int) -> dict[str, Any]:
     plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
     if not plan:
         raise HTTPException(status_code=404, detail="Transcode plan not found.")
@@ -1148,7 +1148,7 @@ async def delete_transcode_plan(plan_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-plans/{plan_id}")
-async def read_transcode_plan(plan_id: int) -> dict[str, Any]:
+def read_transcode_plan(plan_id: int) -> dict[str, Any]:
     try:
         return get_plan(plan_id)
     except ValueError as exc:
@@ -1156,14 +1156,14 @@ async def read_transcode_plan(plan_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-plans/{plan_id}/download.csv")
-async def download_plan_csv(plan_id: int) -> Response:
-    plan = await read_transcode_plan(plan_id)
+def download_plan_csv(plan_id: int) -> Response:
+    plan = read_transcode_plan(plan_id)
     return _csv_response(f"transcode-plan-{plan_id}.csv", plan["items"])
 
 
 @app.get("/api/transcode-plans/{plan_id}/download.sh")
-async def download_plan_shell(plan_id: int) -> Response:
-    plan = await read_transcode_plan(plan_id)
+def download_plan_shell(plan_id: int) -> Response:
+    plan = read_transcode_plan(plan_id)
     lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
     for item in plan["items"]:
         if item.get("command_display"):
@@ -1185,7 +1185,7 @@ async def create_transcode_run(payload: RunCreate) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-runs")
-async def list_transcode_runs(
+def list_transcode_runs(
     limit: int = Query(default=50, ge=1, le=200),
     include_archived: bool = False,
 ) -> list[dict[str, Any]]:
@@ -1201,12 +1201,12 @@ async def list_transcode_runs(
         (limit,),
     )
 @app.get("/api/transcode-runs/stats")
-async def transcode_run_stats() -> dict[str, Any]:
+def transcode_run_stats() -> dict[str, Any]:
     return transcode_savings_stats()
 
 
 @app.get("/api/transcode-runs/{run_id}")
-async def read_transcode_run(run_id: int) -> dict[str, Any]:
+def read_transcode_run(run_id: int) -> dict[str, Any]:
     run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Transcode run not found.")
@@ -1217,17 +1217,17 @@ async def read_transcode_run(run_id: int) -> dict[str, Any]:
 @app.post("/api/transcode-runs/{run_id}/cancel")
 async def cancel_transcode_run(run_id: int) -> dict[str, Any]:
     transcode_manager.cancel_run(run_id)
-    return await read_transcode_run(run_id)
+    return await asyncio.to_thread(read_transcode_run, run_id)
 
 
 @app.post("/api/transcode-runs/{run_id}/retry")
 async def retry_transcode_run(run_id: int) -> dict[str, Any]:
     await transcode_manager.retry_run(run_id)
-    return await read_transcode_run(run_id)
+    return await asyncio.to_thread(read_transcode_run, run_id)
 
 
 @app.post("/api/transcode-runs/{run_id}/archive")
-async def archive_transcode_run(run_id: int) -> dict[str, Any]:
+def archive_transcode_run(run_id: int) -> dict[str, Any]:
     run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Transcode run not found.")
@@ -1237,16 +1237,16 @@ async def archive_transcode_run(run_id: int) -> dict[str, Any]:
         "UPDATE transcode_runs SET archived_at = COALESCE(archived_at, ?) WHERE id = ?",
         (db.utc_now(), run_id),
     )
-    return await read_transcode_run(run_id)
+    return read_transcode_run(run_id)
 
 
 @app.post("/api/transcode-runs/{run_id}/unarchive")
-async def unarchive_transcode_run(run_id: int) -> dict[str, Any]:
+def unarchive_transcode_run(run_id: int) -> dict[str, Any]:
     run = db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Transcode run not found.")
     db.execute("UPDATE transcode_runs SET archived_at = NULL WHERE id = ?", (run_id,))
-    return await read_transcode_run(run_id)
+    return read_transcode_run(run_id)
 
 
 @app.post("/api/transcode-runs/{run_id}/cleanup")
@@ -1293,7 +1293,7 @@ async def validate_transcode_item(run_id: int, item_id: int, payload: ValidateRu
 async def transcode_run_events(run_id: int) -> StreamingResponse:
     async def stream() -> Any:
         while True:
-            run = await read_transcode_run(run_id)
+            run = await asyncio.to_thread(read_transcode_run, run_id)
             yield f"data: {json.dumps(run)}\n\n"
             if run["status"] not in {"queued", "running"}:
                 return
@@ -1303,7 +1303,7 @@ async def transcode_run_events(run_id: int) -> StreamingResponse:
 
 
 @app.get("/api/transcode-runs/{run_id}/items/{item_id}/log", response_class=PlainTextResponse)
-async def transcode_item_log(run_id: int, item_id: int) -> str:
+def transcode_item_log(run_id: int, item_id: int) -> str:
     item = db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id))
     if not item:
         raise HTTPException(status_code=404, detail="Run item not found.")

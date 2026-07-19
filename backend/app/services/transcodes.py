@@ -777,7 +777,7 @@ class TranscodeManager:
                 key, value = text.split("=", 1)
                 progress[key] = value
                 if key == "progress":
-                    self._store_progress(item["id"], progress, duration)
+                    await asyncio.to_thread(self._store_progress, item["id"], progress, duration)
                     progress = {}
 
         async def read_stderr() -> None:

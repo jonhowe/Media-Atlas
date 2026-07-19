@@ -152,7 +152,7 @@ class PlexSyncManager:
         if queued:
             async with self._lock:
                 if self._task is None or self._task.done():
-                    self._task = asyncio.create_task(self._run_sync(queued["id"]))
+                    self._task = self._start_sync_task(queued["id"])
 
     async def test_connection(self) -> dict[str, Any]:
         client = PlexClient(get_settings(include_secret=True))
@@ -216,7 +216,7 @@ class PlexSyncManager:
                 """,
                 (db.utc_now(),),
             )
-            self._task = asyncio.create_task(self._run_sync(job_id))
+            self._task = self._start_sync_task(job_id)
             return read_sync_job(job_id) or {"id": job_id}
 
     async def retry_sync(self, job_id: int) -> dict[str, Any]:
@@ -245,6 +245,12 @@ class PlexSyncManager:
             """,
             (job_id,),
         )
+
+    def _start_sync_task(self, job_id: int) -> asyncio.Task[None]:
+        return asyncio.create_task(asyncio.to_thread(self._run_sync_in_worker, job_id))
+
+    def _run_sync_in_worker(self, job_id: int) -> None:
+        asyncio.run(self._run_sync(job_id))
 
     async def _run_sync(self, job_id: int) -> None:
         now = db.utc_now()
