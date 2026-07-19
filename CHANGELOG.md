@@ -4,6 +4,7 @@ This changelog summarizes released commits on `main` plus current unreleased bra
 
 ## Unreleased
 
+- Kept the Web UI responsive during scans, Plex syncs, retention analysis, and transcodes by isolating blocking backend work, running synchronous API handlers in worker threads, and preventing overlapping UI polling requests.
 - Expanded retention analysis with an exhaustive decision ledger, requested-season and per-file TV eligibility, partially available season support, scoped transcode planning, comprehensive result filters/CSV, and unchanged whole-copy deletion safeguards.
 - Added SQLite migration `0009_retention_evaluation_ledger` with compatible legacy snapshot backfill.
 - Added an authenticated version endpoint and a bottom-pinned sidebar release tag with a silent unavailable fallback.

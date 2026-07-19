@@ -518,15 +518,7 @@ class MediaRetentionManager:
                 ))
 
             _update_job(job_id, current_stage="mapping", progress=65, message="Matching managed files to Plex parts.")
-            for review_item in review_items:
-                for file_row in review_item.get("managed_files", []):
-                    _map_file(file_row)
-            for candidate in candidates:
-                for file_row in candidate["files"]:
-                    _map_file(file_row)
-                candidate["matched_file_count"] = sum(
-                    1 for item in candidate["files"] if item["match_status"] == "matched"
-                )
+            await asyncio.to_thread(_map_analysis_files, review_items, candidates)
             _check_canceled(job_id)
 
             eligibility_dates = [
@@ -545,50 +537,18 @@ class MediaRetentionManager:
             if earliest:
                 _update_job(job_id, current_stage="history", progress=76, message="Reading Plex play history.")
                 history = await PlexClient(plex_settings).history(earliest)
-            history_index = _history_index(history)
-            watch_rows: list[tuple[Any, ...]] = []
-            for event in history:
-                event_row = _watch_event_row(job_id, event)
-                if event_row:
-                    watch_rows.append(event_row)
-
-            now = datetime.now(UTC)
-            for candidate in candidates:
-                eligibility = _parse_datetime(candidate["eligible_since"])
-                protected = _subject_has_play(candidate, eligibility, history_index)
-                coverage_complete = candidate["matched_file_count"] == candidate["file_count"]
-                age = max(0, (now - eligibility).days)
-                names = ", ".join(candidate["requesters"])
-                if candidate.get("deletion_gate_passed") and not protected and coverage_complete:
-                    candidate["status"] = "active"
-                    candidate["reason"] = (
-                        f"Requested by {names}; eligible for {age} days; no Plex account has played "
-                        "the mapped copy since its eligibility date."
-                    )
-                elif candidate.get("deletion_gate_passed") and not protected:
-                    missing = candidate["file_count"] - candidate["matched_file_count"]
-                    candidate["status"] = "diagnostic"
-                    candidate["reason"] = (
-                        f"No qualifying Plex plays were found, but {missing} of {candidate['file_count']} "
-                        "managed files could not be mapped exactly. Deletion is disabled."
-                    )
-                else:
-                    candidate["status"] = "review_only"
-                    candidate["reason"] = (
-                        "Whole-copy deletion safeguards are not satisfied; eligible movie or season files "
-                        "remain available through retention review."
-                    )
-            candidate_by_key = {item["candidate_key"]: item for item in candidates}
-            _finalize_review_items(
+            watch_rows = await asyncio.to_thread(
+                _apply_history_evidence,
+                job_id,
+                history,
+                candidates,
                 review_items,
-                history_index,
                 int(settings["minimum_unwatched_days"]),
-                candidate_by_key,
             )
             _check_canceled(job_id)
 
             _update_job(job_id, current_stage="publish", progress=92, message="Publishing retention snapshot.")
-            _publish_snapshot(job_id, candidates, review_items, watch_rows, warnings)
+            await asyncio.to_thread(_publish_snapshot, job_id, candidates, review_items, watch_rows, warnings)
             status = "succeeded_with_warnings" if warnings else "succeeded"
             _update_job(
                 job_id,
@@ -1781,6 +1741,21 @@ def _map_file(file_row: dict[str, Any]) -> None:
         file_row["match_status"] = "ambiguous"
 
 
+def _map_analysis_files(
+    review_items: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> None:
+    for review_item in review_items:
+        for file_row in review_item.get("managed_files", []):
+            _map_file(file_row)
+    for candidate in candidates:
+        for file_row in candidate["files"]:
+            _map_file(file_row)
+        candidate["matched_file_count"] = sum(
+            1 for item in candidate["files"] if item["match_status"] == "matched"
+        )
+
+
 def _history_index(history: list[dict[str, Any]]) -> dict[str, list[datetime]]:
     result: dict[str, list[datetime]] = defaultdict(list)
     for event in history:
@@ -1824,6 +1799,55 @@ def _watch_event_row(job_id: int, event: dict[str, Any]) -> tuple[Any, ...] | No
         event.get("title") or event.get("grandparentTitle"),
         db.dumps(event),
     )
+
+
+def _apply_history_evidence(
+    job_id: int,
+    history: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    review_items: list[dict[str, Any]],
+    minimum_unwatched_days: int,
+) -> list[tuple[Any, ...]]:
+    history_index = _history_index(history)
+    watch_rows = [
+        event_row
+        for event in history
+        if (event_row := _watch_event_row(job_id, event)) is not None
+    ]
+    now = datetime.now(UTC)
+    for candidate in candidates:
+        eligibility = _parse_datetime(candidate["eligible_since"])
+        protected = _subject_has_play(candidate, eligibility, history_index)
+        coverage_complete = candidate["matched_file_count"] == candidate["file_count"]
+        age = max(0, (now - eligibility).days)
+        names = ", ".join(candidate["requesters"])
+        if candidate.get("deletion_gate_passed") and not protected and coverage_complete:
+            candidate["status"] = "active"
+            candidate["reason"] = (
+                f"Requested by {names}; eligible for {age} days; no Plex account has played "
+                "the mapped copy since its eligibility date."
+            )
+        elif candidate.get("deletion_gate_passed") and not protected:
+            missing = candidate["file_count"] - candidate["matched_file_count"]
+            candidate["status"] = "diagnostic"
+            candidate["reason"] = (
+                f"No qualifying Plex plays were found, but {missing} of {candidate['file_count']} "
+                "managed files could not be mapped exactly. Deletion is disabled."
+            )
+        else:
+            candidate["status"] = "review_only"
+            candidate["reason"] = (
+                "Whole-copy deletion safeguards are not satisfied; eligible movie or season files "
+                "remain available through retention review."
+            )
+    candidate_by_key = {item["candidate_key"]: item for item in candidates}
+    _finalize_review_items(
+        review_items,
+        history_index,
+        minimum_unwatched_days,
+        candidate_by_key,
+    )
+    return watch_rows
 
 
 def _publish_snapshot(

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DependencyList, type FormEvent, type ReactNode } from "react";
 import { api, apiText, exportUrl, setCsrfToken } from "./api";
 import type {
   AdminStatus,
@@ -88,6 +88,37 @@ const THEME_STORAGE_KEY = "media-atlas:theme";
 const TRANSCODE_PROFILES_URL = "https://github.com/jonhowe/Media-Atlas/blob/main/docs/TRANSCODE_PROFILES.md";
 
 type Theme = "light" | "dark";
+
+function usePolling(
+  callback: () => Promise<void>,
+  delayMs: number,
+  dependencies: DependencyList = [],
+  enabled = true
+) {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+
+    async function poll() {
+      try {
+        await callbackRef.current();
+      } catch {
+        // Individual refresh functions surface errors when the page needs them.
+      } finally {
+        if (active && enabled) timer = window.setTimeout(poll, delayMs);
+      }
+    }
+
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [delayMs, enabled, ...dependencies]);
+}
 
 function getInitialTheme(): Theme {
   try {
@@ -535,11 +566,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
   const [savings, setSavings] = useState<TranscodeSavingsStats | null>(null);
   const [retention, setRetention] = useState<RetentionSummary | null>(null);
 
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
+  usePolling(refresh, 5000);
 
   async function refresh() {
     try {
@@ -750,11 +777,7 @@ function Scans({
 }) {
   const [scans, setScans] = useState<ScanJob[]>([]);
   const [isStarting, setIsStarting] = useState(false);
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 2000);
-    return () => window.clearInterval(timer);
-  }, []);
+  usePolling(refresh, 2000);
 
   async function refresh() {
     setScans(await api<ScanJob[]>("/api/scans?limit=25"));
@@ -1107,11 +1130,7 @@ function Retention({ onToast }: { onToast: (message: string) => void }) {
   const [selected, setSelected] = useState<RetentionReviewResult | null>(null);
   const [transcodeScope, setTranscodeScope] = useState<{ result: RetentionReviewResult; scope: RetentionReviewScope } | null>(null);
 
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 5000);
-    return () => window.clearInterval(timer);
-  }, [decision, mediaType, connectionId, query, page]);
+  usePolling(refresh, 5000, [decision, mediaType, connectionId, query, page]);
 
   async function refresh() {
     try {
@@ -2053,18 +2072,11 @@ function Runs({
   const [showArchived, setShowArchived] = useState(false);
   const [stats, setStats] = useState<TranscodeSavingsStats | null>(null);
 
-  useEffect(() => {
-    refreshRuns();
-    const timer = window.setInterval(refreshRuns, 2000);
-    return () => window.clearInterval(timer);
-  }, [showArchived]);
+  usePolling(refreshRuns, 2000, [showArchived]);
 
-  useEffect(() => {
-    if (!selectedId) return;
-    refreshRun(selectedId);
-    const timer = window.setInterval(() => refreshRun(selectedId), 2000);
-    return () => window.clearInterval(timer);
-  }, [selectedId]);
+  usePolling(async () => {
+    if (selectedId) await refreshRun(selectedId);
+  }, 2000, [selectedId], Boolean(selectedId));
 
   async function refreshRuns() {
     const [nextRuns, nextStats] = await Promise.all([
@@ -2485,12 +2497,7 @@ function ApplicationLogs({ onToast }: { onToast: (message: string) => void }) {
   const [followLatest, setFollowLatest] = useState(true);
   const viewerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    refresh();
-    if (!polling) return;
-    const timer = window.setInterval(refresh, 3000);
-    return () => window.clearInterval(timer);
-  }, [level, loggerPrefix, query, limit, polling]);
+  usePolling(refresh, 3000, [level, loggerPrefix, query, limit], polling);
 
   useEffect(() => {
     if (followLatest && viewerRef.current) {
@@ -2574,30 +2581,19 @@ function TranscodeLogs({
   const [followLatest, setFollowLatest] = useState(true);
   const viewerRef = useRef<HTMLPreElement>(null);
 
-  useEffect(() => {
-    refreshRuns();
-    const timer = window.setInterval(refreshRuns, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
+  usePolling(refreshRuns, 5000);
+
+  usePolling(async () => {
+    if (runId) await refreshRun(runId);
+  }, 2000, [runId], Boolean(runId) && polling);
 
   useEffect(() => {
-    if (!runId) return;
-    refreshRun(runId);
-    if (!polling) return;
-    const timer = window.setInterval(() => refreshRun(runId), 2000);
-    return () => window.clearInterval(timer);
-  }, [runId, polling]);
+    if (!runId || !itemId) setLog("");
+  }, [runId, itemId]);
 
-  useEffect(() => {
-    if (!runId || !itemId) {
-      setLog("");
-      return;
-    }
-    refreshLog(runId, itemId);
-    if (!polling) return;
-    const timer = window.setInterval(() => refreshLog(runId, itemId), 2000);
-    return () => window.clearInterval(timer);
-  }, [runId, itemId, polling]);
+  usePolling(async () => {
+    if (runId && itemId) await refreshLog(runId, itemId);
+  }, 2000, [runId, itemId], Boolean(runId) && Boolean(itemId) && polling);
 
   useEffect(() => {
     if (followLatest && viewerRef.current) {
@@ -2685,19 +2681,11 @@ function ScanLogs({
   const [scan, setScan] = useState<ScanJob | null>(null);
   const [polling, setPolling] = useState(true);
 
-  useEffect(() => {
-    refreshScans();
-    const timer = window.setInterval(refreshScans, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
+  usePolling(refreshScans, 5000);
 
-  useEffect(() => {
-    if (!scanId) return;
-    refreshScan(scanId);
-    if (!polling) return;
-    const timer = window.setInterval(() => refreshScan(scanId), 2000);
-    return () => window.clearInterval(timer);
-  }, [scanId, polling]);
+  usePolling(async () => {
+    if (scanId) await refreshScan(scanId);
+  }, 2000, [scanId], Boolean(scanId) && polling);
 
   async function refreshScans() {
     try {
@@ -2786,11 +2774,7 @@ function AdminStatusPage({ onToast }: { onToast: (message: string) => void }) {
   const [status, setStatus] = useState<AdminStatus | null>(null);
   const [stats, setStats] = useState<Record<string, any> | null>(null);
 
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 10000);
-    return () => window.clearInterval(timer);
-  }, []);
+  usePolling(refresh, 10000);
 
   async function refresh() {
     try {
