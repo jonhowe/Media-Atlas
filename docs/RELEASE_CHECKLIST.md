@@ -36,3 +36,5 @@ Use this checklist before publishing a tagged GHCR release.
 12. Check the Retention page near 390px and 1440px widths with a long title, many requesters, a source warning, the detail drawer, transcode dialog, and guarded delete controls.
 13. Check the Logs page near 390px and 1440px widths with application filters, a running transcode item, a completed item, and a scan containing `ffprobe` stderr.
 14. Check the Transcode Planner near 390px and 1440px widths for each actionable category, category-switch confirmation, profile suggestions/overrides, search, paging, and review-only plan state.
+15. Check Library audio cleanup near 390px and 1440px widths with an MKV and a non-MKV file: filter multiple-audio files, remove a non-default track, replace a removed default, edit the persistent batch, and confirm destination-collision blockers.
+16. Confirm the container dual-audio smoke test passes for both MKVToolNix and FFmpeg stream-copy cleanup, then verify a staged result before exercising guarded publish on disposable media.

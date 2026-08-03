@@ -51,6 +51,7 @@ class ScannerConfig:
 @dataclass(frozen=True)
 class TranscoderConfig:
     ffmpeg_path: str
+    mkvmerge_path: str
     concurrency: int
     timeout_seconds: int
     staging_dir: Path
@@ -247,6 +248,7 @@ def load_config() -> AppConfig:
         ),
         transcoder=TranscoderConfig(
             ffmpeg_path=os.getenv("MEDIA_ATLAS_FFMPEG_PATH", "ffmpeg"),
+            mkvmerge_path=os.getenv("MEDIA_ATLAS_MKVMERGE_PATH", "mkvmerge"),
             concurrency=1,
             timeout_seconds=max(0, _int_env("MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS", 0)),
             staging_dir=staging_dir,

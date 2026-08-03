@@ -54,7 +54,9 @@ class ProductionSmokeTest(unittest.TestCase):
             self.assertIn("0006_transcode_savings", db.migration_status()["applied"])
             self.assertIn("0007_publish_validation_and_indexes", db.migration_status()["applied"])
             self.assertIn("0008_media_retention_review", db.migration_status()["applied"])
+            self.assertIn("0010_audio_cleanup_batches", db.migration_status()["applied"])
             self.assertEqual(CONFIG.transcoder.backup_dir, (Path(temp_dir) / "transcode-backups").resolve())
+            self.assertEqual(CONFIG.transcoder.mkvmerge_path, "mkvmerge")
             with tempfile.TemporaryDirectory() as config_temp_dir:
                 config_env = {
                     "MEDIA_ATLAS_HOST": "0.0.0.0",

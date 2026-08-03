@@ -10,7 +10,7 @@ The Dashboard summarizes storage, recommendation categories, tool readiness, Ple
 
 ## Inspect one media file
 
-Search and filter the Library, then open a row to review technical media details, the recommendation rationale, and matched Plex metadata.
+Search and filter the Library, including files with multiple audio streams, then open a row to review technical media details, readable audio-track metadata, the recommendation rationale, and matched Plex metadata. **Manage audio streams** opens a fresh inspection where selected tracks can be removed, a replacement default can be chosen when required, and the operation can be added to a persistent batch for staged execution.
 
 ![Library detail drawer for the fictional Glass Horizon movie with video, audio, recommendation, and Plex metadata](assets/web-ui/library.png)
 
@@ -40,7 +40,7 @@ The Transcode Planner shows existing plans and run history alongside a searchabl
 
 ## Monitor transcode runs
 
-Runs track cumulative savings, job progress, item outcomes, and timing. Opening a run reveals its per-item verification, publish, validation, and cleanup state.
+Runs track cumulative savings, job progress, item outcomes, and timing for transcodes and audio cleanup. Opening a run reveals its per-item backend, live destination, verification, publish, validation, and cleanup state.
 
 ![Runs page showing synthetic storage savings and a failed container-cleanup run with one completed and one failed item](assets/web-ui/runs.png)
 

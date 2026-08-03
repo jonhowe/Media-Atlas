@@ -32,6 +32,16 @@ from .security import (
     set_session_cookie,
 )
 from .services.paths import is_within_allowed_browse_roots, resolve_existing_directory
+from .services.audio_cleanup import (
+    AudioCleanupError,
+    clear_batch as clear_audio_cleanup_batch,
+    get_batch as get_audio_cleanup_batch,
+    inspect_file as inspect_audio_cleanup_file,
+    prepare_batch_for_queue,
+    public_inspection,
+    remove_batch_item,
+    upsert_batch_item,
+)
 from .services.plex import (
     PlexError,
     PlexSyncManager,
@@ -125,6 +135,17 @@ class PublishRunItemRequest(BaseModel):
     source_path: str = Field(min_length=1)
     target_path: str = Field(min_length=1)
     confirmation_text: str = Field(min_length=1)
+    publish_path: str | None = None
+
+
+class AudioCleanupBatchItemUpsert(BaseModel):
+    source_fingerprint: str = Field(min_length=64, max_length=64)
+    removed_selection_keys: list[str] = Field(min_length=1)
+    replacement_default_key: str | None = None
+
+
+class AudioCleanupBatchQueue(BaseModel):
+    name: str | None = Field(default=None, max_length=180)
 
 
 class CleanupRunRequest(BaseModel):
@@ -266,6 +287,7 @@ def health() -> dict[str, Any]:
         "database_available": status["database"]["ok"],
         "ffprobe_available": status["tools"]["ffprobe"]["available"],
         "ffmpeg_available": status["tools"]["ffmpeg"]["available"],
+        "mkvmerge_available": status["tools"]["mkvmerge"]["available"],
         "data_dir": str(CONFIG.data_dir),
         "reports_dir": str(CONFIG.reports_dir),
         "logs_dir": str(CONFIG.logs_dir),
@@ -898,6 +920,7 @@ def list_media(
     plex_genre: str | None = None,
     plex_label: str | None = None,
     plex_watched: bool | None = None,
+    min_audio_streams: int | None = Query(default=None, ge=0, le=100),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     sort: str = "filename",
@@ -921,6 +944,7 @@ def list_media(
         plex_genre,
         plex_label,
         plex_watched,
+        min_audio_streams,
     )
     sort_column = _sort_column(sort)
     offset = (page - 1) * page_size
@@ -959,6 +983,59 @@ def get_media(file_id: int) -> dict[str, Any]:
     item["streams"] = db.query_all("SELECT * FROM streams WHERE file_id = ? ORDER BY stream_index", (file_id,))
     item["chapters"] = db.query_all("SELECT * FROM chapters WHERE file_id = ? ORDER BY chapter_index", (file_id,))
     return item
+
+
+@app.get("/api/media/{file_id}/audio-cleanup-inspection")
+async def audio_cleanup_inspection(file_id: int) -> dict[str, Any]:
+    try:
+        return public_inspection(await inspect_audio_cleanup_file(file_id))
+    except AudioCleanupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/audio-cleanup/batch")
+def read_audio_cleanup_batch() -> dict[str, Any]:
+    return get_audio_cleanup_batch()
+
+
+@app.put("/api/audio-cleanup/batch/items/{file_id}")
+async def put_audio_cleanup_batch_item(
+    file_id: int, payload: AudioCleanupBatchItemUpsert
+) -> dict[str, Any]:
+    try:
+        return await upsert_batch_item(
+            file_id,
+            payload.source_fingerprint,
+            payload.removed_selection_keys,
+            payload.replacement_default_key,
+        )
+    except AudioCleanupError as exc:
+        status_code = 409 if "changed" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.delete("/api/audio-cleanup/batch/items/{file_id}")
+def delete_audio_cleanup_batch_item(file_id: int) -> dict[str, Any]:
+    return remove_batch_item(file_id)
+
+
+@app.delete("/api/audio-cleanup/batch")
+def delete_audio_cleanup_batch() -> dict[str, Any]:
+    return clear_audio_cleanup_batch()
+
+
+@app.post("/api/audio-cleanup/batch/queue")
+async def queue_audio_cleanup_batch(payload: AudioCleanupBatchQueue) -> dict[str, Any]:
+    try:
+        batch = await prepare_batch_for_queue(payload.name)
+        run = await transcode_manager.create_run(
+            batch["id"],
+            batch["name"],
+            audio_cleanup_validated=True,
+        )
+        return {"plan": get_plan(batch["id"]), "run": run}
+    except (AudioCleanupError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/reports/summary")
@@ -1066,8 +1143,18 @@ def create_transcode_plan(payload: PlanCreate) -> dict[str, Any]:
 
 
 @app.get("/api/transcode-plans")
-def list_transcode_plans(include_archived: bool = False) -> list[dict[str, Any]]:
-    archive_filter = "" if include_archived else "WHERE tp.archived_at IS NULL"
+def list_transcode_plans(
+    include_archived: bool = False,
+    kind: Literal["transcode", "audio_cleanup"] | None = None,
+) -> list[dict[str, Any]]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    if not include_archived:
+        conditions.append("tp.archived_at IS NULL")
+    if kind:
+        conditions.append("tp.plan_kind = ?")
+        params.append(kind)
+    archive_filter = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     plans = db.query_all(
         f"""
         SELECT tp.*, p.name AS profile_name,
@@ -1078,7 +1165,8 @@ def list_transcode_plans(include_archived: bool = False) -> list[dict[str, Any]]
         LEFT JOIN transcode_profiles p ON p.id = tp.profile_id
         {archive_filter}
         ORDER BY tp.id DESC
-        """
+        """,
+        tuple(params),
     )
     for plan in plans:
         plan["sample_items"] = db.query_all(
@@ -1324,6 +1412,7 @@ async def publish_transcode_item(run_id: int, item_id: int, payload: PublishRunI
             payload.source_path,
             payload.target_path,
             payload.confirmation_text,
+            payload.publish_path,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1369,6 +1458,7 @@ def _media_filters(*values: Any) -> tuple[str, list[Any]]:
         plex_genre,
         plex_label,
         plex_watched,
+        min_audio_streams,
     ) = values
     conditions: list[str] = []
     params: list[Any] = []
@@ -1400,6 +1490,9 @@ def _media_filters(*values: Any) -> tuple[str, list[Any]]:
     if is_missing is not None:
         conditions.append("f.is_missing = ?")
         params.append(1 if is_missing else 0)
+    if min_audio_streams is not None:
+        conditions.append("f.audio_stream_count >= ?")
+        params.append(min_audio_streams)
     if plex_matched is not None:
         conditions.append("pfm.match_status = 'matched'" if plex_matched else "(pfm.id IS NULL OR pfm.match_status != 'matched')")
     if plex_library:
