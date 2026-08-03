@@ -42,6 +42,7 @@ jobs:
           grep -q "MEDIA_ATLAS_AUTH_MODE" /tmp/media-atlas-compose.yml
           grep -q "MEDIA_ATLAS_ACKNOWLEDGE_AUTH_DISABLED_LAN" /tmp/media-atlas-compose.yml
           grep -q "MEDIA_ATLAS_TRANSCODE_BACKUP_DIR" /tmp/media-atlas-compose.yml
+          grep -q "MEDIA_ATLAS_MKVMERGE_PATH" /tmp/media-atlas-compose.yml
           grep -q "MEDIA_ATLAS_ALLOWED_ORIGINS" /tmp/media-atlas-compose.yml
 
       - name: Set up Docker Buildx
@@ -70,7 +71,10 @@ jobs:
       - name: Smoke test image internals
         run: |
           docker run --rm media-atlas:ci-test \
-            bash -c "which ffmpeg && which ffprobe && which vainfo && test -f /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so && test \"\$LIBVA_DRIVER_NAME\" = iHD && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
+            bash -c "which ffmpeg && which ffprobe && which mkvmerge && which vainfo && test -f /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so && test \"\$LIBVA_DRIVER_NAME\" = iHD && python -m compileall app && python -c 'from app.main import app; assert len(app.routes) > 0'"
+
+      - name: Smoke test dual-audio cleanup
+        run: docker run --rm media-atlas:ci-test bash /app/scripts/smoke-audio-cleanup.sh
 
       - name: Smoke test HTTP health endpoint
         run: |

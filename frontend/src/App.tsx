@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type DependencyList, type FormEvent, type 
 import { api, apiText, exportUrl, setCsrfToken } from "./api";
 import type {
   AdminStatus,
+  AudioCleanupBatch,
+  AudioCleanupInspection,
+  AudioCleanupTrack,
   ApplicationLogEntry,
   ApplicationLogPage,
   AuthStatus,
@@ -343,7 +346,7 @@ export default function App() {
             {page === "dashboard" && <Dashboard onToast={setToast} />}
             {page === "directories" && <Directories onToast={setToast} />}
             {page === "scans" && <Scans onToast={setToast} onOpenLog={(scanId) => openLogs({ tab: "scans", scanId })} />}
-            {page === "library" && <Library onToast={setToast} />}
+            {page === "library" && <Library onToast={setToast} onQueued={() => setPage("runs")} />}
             {page === "retention" && <Retention onToast={setToast} />}
             {page === "candidates" && <Candidates onToast={setToast} onPlanCategory={openPlanner} />}
             {page === "reports" && <Reports />}
@@ -606,12 +609,13 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
             <Status label="Database" ok={Boolean(health?.database_available)} />
             <Status label="ffprobe" ok={Boolean(health?.ffprobe_available)} />
             <Status label="ffmpeg" ok={Boolean(health?.ffmpeg_available)} />
+            <Status label="mkvmerge" ok={Boolean(health?.mkvmerge_available)} />
           </div>
         </Panel>
         <Panel title="Plex Enrichment">
           <PlexStatusPanel status={summary?.plex} />
         </Panel>
-        <Panel title="Transcode Savings">
+        <Panel title="Processing Savings">
           <TranscodeSavingsPanel stats={savings} />
         </Panel>
         <Panel title="Retention Review">
@@ -628,7 +632,7 @@ function Dashboard({ onToast }: { onToast: (message: string) => void }) {
             </span>
           </div>
         </Panel>
-        <Panel title="Recent Transcode Runs">
+        <Panel title="Recent Processing Runs">
           <RecentTranscodeRuns runs={runs} />
         </Panel>
         <Panel title="Recent Scans">
@@ -990,7 +994,17 @@ function RecentScans({ scans }: { scans: ScanJob[] }) {
   );
 }
 
-function Library({ onToast }: { onToast: (message: string) => void }) {
+function emptyAudioCleanupBatch(): AudioCleanupBatch {
+  return { id: null, name: "Audio cleanup draft", status: "draft", item_count: 0, items: [] };
+}
+
+function Library({
+  onToast,
+  onQueued
+}: {
+  onToast: (message: string) => void;
+  onQueued: () => void;
+}) {
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [total, setTotal] = useState(0);
   const [libraries, setLibraries] = useState<PlexLibrary[]>([]);
@@ -1004,15 +1018,19 @@ function Library({ onToast }: { onToast: (message: string) => void }) {
   const [plexGenre, setPlexGenre] = useState("");
   const [plexLabel, setPlexLabel] = useState("");
   const [plexWatched, setPlexWatched] = useState("");
+  const [multiAudioOnly, setMultiAudioOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MediaFile | null>(null);
+  const [batch, setBatch] = useState<AudioCleanupBatch>(emptyAudioCleanupBatch);
+  const [batchOpen, setBatchOpen] = useState(false);
 
   useEffect(() => {
     refresh();
-  }, [query, category, plexMatched, plexLibrary, plexType, plexYear, plexCollection, plexGenre, plexLabel, plexWatched, page]);
+  }, [query, category, plexMatched, plexLibrary, plexType, plexYear, plexCollection, plexGenre, plexLabel, plexWatched, multiAudioOnly, page]);
 
   useEffect(() => {
     api<PlexLibrary[]>("/api/plex/libraries").then(setLibraries).catch(() => setLibraries([]));
+    api<AudioCleanupBatch>("/api/audio-cleanup/batch").then(setBatch).catch(() => setBatch(emptyAudioCleanupBatch()));
   }, []);
 
   async function refresh() {
@@ -1028,6 +1046,7 @@ function Library({ onToast }: { onToast: (message: string) => void }) {
       if (plexGenre) params.set("plex_genre", plexGenre);
       if (plexLabel) params.set("plex_label", plexLabel);
       if (plexWatched) params.set("plex_watched", plexWatched);
+      if (multiAudioOnly) params.set("min_audio_streams", "2");
       const result = await api<{ items: MediaFile[]; total: number }>(`/api/media?${params}`);
       setFiles(result.items);
       setTotal(result.total);
@@ -1073,11 +1092,39 @@ function Library({ onToast }: { onToast: (message: string) => void }) {
           <option value="true">Watched</option>
           <option value="false">Unwatched</option>
         </select>
+        <label className="inlineCheck">
+          <input
+            type="checkbox"
+            checked={multiAudioOnly}
+            onChange={(event) => { setPage(1); setMultiAudioOnly(event.target.checked); }}
+          />
+          2+ audio tracks
+        </label>
+        <button className={batch.item_count ? "primary" : ""} onClick={() => setBatchOpen(true)}>
+          Audio cleanup batch ({batch.item_count})
+        </button>
         <a className="button" href={exportUrl("all-files.csv")}>Export all files</a>
       </div>
       <MediaTable files={files} onOpen={openDetail} />
       <Pager page={page} total={total} pageSize={50} onPage={setPage} />
-      {selected && <DetailDrawer file={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailDrawer
+          file={selected}
+          onClose={() => setSelected(null)}
+          onToast={onToast}
+          onBatchChange={setBatch}
+        />
+      )}
+      {batchOpen && (
+        <AudioCleanupBatchDrawer
+          batch={batch}
+          onClose={() => setBatchOpen(false)}
+          onBatchChange={setBatch}
+          onEdit={async (fileId) => { setBatchOpen(false); await openDetail(fileId); }}
+          onQueued={() => { setBatch(emptyAudioCleanupBatch()); setBatchOpen(false); onQueued(); }}
+          onToast={onToast}
+        />
+      )}
     </section>
   );
 }
@@ -1640,7 +1687,7 @@ function Planner({
     try {
       const [nextProfiles, nextPlans] = await Promise.all([
         api<TranscodeProfile[]>("/api/transcode-profiles"),
-        api<TranscodePlan[]>(`/api/transcode-plans${showArchived ? "?include_archived=true" : ""}`)
+        api<TranscodePlan[]>(`/api/transcode-plans?kind=transcode${showArchived ? "&include_archived=true" : ""}`)
       ]);
       setProfiles(nextProfiles);
       setPlans(nextPlans);
@@ -2202,11 +2249,11 @@ function Runs({
         : null
     ].filter(Boolean).join("\n");
     const firstConfirmed = window.confirm(
-      `Publish this staged output to the original location?\n\nOriginal live file:\n${item.source_path}\n\nStaged output:\n${item.target_path}\n\n${sizeSummary ? `${sizeSummary}\n\n` : ""}Media Atlas will move the original file into transcode backup storage, then copy the staged output into the original path.`
+      `Publish this staged output?\n\nOriginal live file:\n${item.source_path}\n\nNew live path:\n${item.publish_path || item.source_path}\n\nStaged output:\n${item.target_path}\n\n${sizeSummary ? `${sizeSummary}\n\n` : ""}Media Atlas will move the original file into backup storage, then publish the staged output to the live path.`
     );
     if (!firstConfirmed) return;
     const phrase = window.prompt(
-      `Final confirmation required.\n\nThis replaces the live source file at:\n${item.source_path}\n\nType REPLACE to continue.`
+      `Final confirmation required.\n\nThis removes the original live file at:\n${item.source_path}\n\nand publishes to:\n${item.publish_path || item.source_path}\n\nType REPLACE to continue.`
     );
     if (phrase !== "REPLACE") {
       onToast("Publish canceled.");
@@ -2219,6 +2266,7 @@ function Runs({
         body: JSON.stringify({
           source_path: item.source_path,
           target_path: item.target_path,
+          publish_path: item.publish_path || item.source_path,
           confirmation_text: phrase
         })
       });
@@ -2235,7 +2283,7 @@ function Runs({
 
   return (
     <section className="stack">
-      <Panel title="Transcode Savings">
+      <Panel title="Processing Savings">
         <TranscodeSavingsPanel stats={stats} />
       </Panel>
       <Panel title="Runs">
@@ -2362,7 +2410,7 @@ function Runs({
             <tbody>
               {selected.items?.map((item) => (
                 <tr key={item.id}>
-                  <td className="mobileStackPrimary"><strong>Item #{item.id}</strong></td>
+                  <td className="mobileStackPrimary"><strong>Item #{item.id}</strong><div className="muted">{item.operation_type === "audio_cleanup" ? `Audio cleanup · ${item.backend === "mkvmerge" ? "MKVToolNix" : "FFmpeg"}` : "Transcode"}</div></td>
                   <td>
                     <span className="mobileCellLabel">Status</span>
                     <StatusBadge status={item.status} />
@@ -2375,7 +2423,7 @@ function Runs({
                         {item.speed && <span>{item.speed}</span>}
                       </div>
                       <Progress value={item.progress_percent} />
-                      {item.time_seconds != null && <div className="muted">encoded {formatElapsed(item.time_seconds * 1000)}</div>}
+                      {item.time_seconds != null && <div className="muted">processed {formatElapsed(item.time_seconds * 1000)}</div>}
                     </div>
                   </td>
                   <td>
@@ -2392,6 +2440,7 @@ function Runs({
                     <span>{item.target_path}</span>
                     <strong>Original</strong>
                     <span>{item.source_path}</span>
+                    {item.publish_path && item.publish_path !== item.source_path && <><strong>Live destination</strong><span>{item.publish_path}</span></>}
                     <div className="scanTiming">
                       {item.source_size_bytes != null && <span>Before {formatBytes(item.source_size_bytes)}</span>}
                       {item.output_size_bytes != null && <span>After {formatBytes(item.output_size_bytes)}</span>}
@@ -3428,7 +3477,19 @@ function MediaTable({ files, onOpen }: { files: MediaFile[]; onOpen: (id: number
   );
 }
 
-function DetailDrawer({ file, onClose }: { file: MediaFile; onClose: () => void }) {
+function DetailDrawer({
+  file,
+  onClose,
+  onToast,
+  onBatchChange
+}: {
+  file: MediaFile;
+  onClose: () => void;
+  onToast: (message: string) => void;
+  onBatchChange: (batch: AudioCleanupBatch) => void;
+}) {
+  const [audioCleanupOpen, setAudioCleanupOpen] = useState(false);
+  const audioStreams = (file.streams || []).filter((stream) => stream.stream_type === "audio");
   return (
     <div className="drawerBackdrop" onClick={onClose}>
       <aside className="drawer" onClick={(event) => event.stopPropagation()}>
@@ -3481,15 +3542,274 @@ function DetailDrawer({ file, onClose }: { file: MediaFile; onClose: () => void 
             <p className="muted">No matched Plex item for this file.</p>
           )}
         </Panel>
-        <Panel title="Streams">
+        <Panel title={`Audio Tracks (${audioStreams.length})`}>
+          <div className="panelIntro">
+            <p className="muted">Track metadata comes from the latest inventory scan. Audio cleanup performs a fresh inspection before adding or running an item.</p>
+            <button
+              className="primary"
+              disabled={file.is_missing || audioStreams.length < 2}
+              onClick={() => setAudioCleanupOpen(true)}
+            >
+              Manage audio tracks
+            </button>
+          </div>
+          <table className="audioTracksTable mobileStackTable">
+            <thead><tr><th>Track</th><th>Language / title</th><th>Codec</th><th>Channels</th><th>Audio</th><th>Flags</th></tr></thead>
+            <tbody>
+              {audioStreams.map((stream, ordinal) => (
+                <tr key={stream.id || stream.stream_index}>
+                  <td className="mobileStackPrimary"><strong>#{ordinal + 1}</strong><div className="muted">stream {stream.stream_index}</div></td>
+                  <td><span className="mobileCellLabel">Language / title</span><strong>{stream.language || "Undetermined"}</strong><div className="muted">{stream.title || "No title"}</div></td>
+                  <td><span className="mobileCellLabel">Codec</span>{stream.codec_name || "Unknown"}<div className="muted">{stream.profile || stream.codec_long_name}</div></td>
+                  <td><span className="mobileCellLabel">Channels</span>{stream.channel_layout || (stream.channels ? `${stream.channels} channels` : "Unknown")}</td>
+                  <td><span className="mobileCellLabel">Audio</span>{stream.sample_rate ? `${stream.sample_rate.toLocaleString()} Hz` : "Unknown"}<div className="muted">{stream.bit_rate ? `${Math.round(stream.bit_rate / 1000).toLocaleString()} kbps` : "Unknown bitrate"}</div></td>
+                  <td><span className="mobileCellLabel">Flags</span>{Boolean(stream.disposition_default) && <Badge tone="good">Default</Badge>} {Boolean(stream.disposition_forced) && <Badge tone="warn">Forced</Badge>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!audioStreams.length && <p className="muted">No audio tracks were stored for this file.</p>}
+        </Panel>
+        <Panel title="All Streams (raw)">
           <pre className="json">{JSON.stringify(file.streams, null, 2)}</pre>
         </Panel>
         <Panel title="Raw ffprobe JSON">
           <pre className="json">{file.raw_probe_json ? JSON.stringify(JSON.parse(file.raw_probe_json), null, 2) : "No raw probe JSON stored."}</pre>
         </Panel>
+        {audioCleanupOpen && (
+          <AudioCleanupDialog
+            file={file}
+            onClose={() => setAudioCleanupOpen(false)}
+            onAdded={(batch) => { onBatchChange(batch); setAudioCleanupOpen(false); }}
+            onToast={onToast}
+          />
+        )}
       </aside>
     </div>
   );
+}
+
+function AudioCleanupDialog({
+  file,
+  onClose,
+  onAdded,
+  onToast
+}: {
+  file: MediaFile;
+  onClose: () => void;
+  onAdded: (batch: AudioCleanupBatch) => void;
+  onToast: (message: string) => void;
+}) {
+  const [inspection, setInspection] = useState<AudioCleanupInspection | null>(null);
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [replacementDefault, setReplacementDefault] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api<AudioCleanupInspection>(`/api/media/${file.id}/audio-cleanup-inspection`)
+      .then((result) => { if (active) setInspection(result); })
+      .catch((error) => { if (active) onToast(String(error)); });
+    return () => { active = false; };
+  }, [file.id]);
+
+  const retained = inspection?.audio_tracks.filter((track) => !removed.has(track.selection_key)) || [];
+  const removedDefault = inspection?.audio_tracks.some((track) => removed.has(track.selection_key) && track.default) || false;
+  const canSave = Boolean(
+    inspection
+    && inspection.source_fingerprint
+    && !inspection.blockers.length
+    && removed.size
+    && retained.length
+    && (!removedDefault || retained.some((track) => track.selection_key === replacementDefault))
+  );
+
+  function toggleTrack(track: AudioCleanupTrack) {
+    setRemoved((current) => {
+      const next = new Set(current);
+      if (next.has(track.selection_key)) next.delete(track.selection_key);
+      else if ((inspection?.audio_tracks.length || 0) - next.size > 1) next.add(track.selection_key);
+      return next;
+    });
+    if (replacementDefault === track.selection_key) setReplacementDefault("");
+  }
+
+  async function addToBatch() {
+    if (!inspection?.source_fingerprint || !canSave) return;
+    setSaving(true);
+    try {
+      const batch = await api<AudioCleanupBatch>(`/api/audio-cleanup/batch/items/${file.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          source_fingerprint: inspection.source_fingerprint,
+          removed_selection_keys: [...removed],
+          replacement_default_key: removedDefault ? replacementDefault : null
+        })
+      });
+      onAdded(batch);
+      onToast(`${file.filename} added to the audio cleanup batch.`);
+    } catch (error) {
+      onToast(String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="dialogBackdrop" onClick={onClose}>
+      <section className="dialogPanel audioCleanupDialog" role="dialog" aria-modal="true" aria-labelledby="audio-cleanup-title" onClick={(event) => event.stopPropagation()}>
+        <div className="drawerHeader">
+          <div><h2 id="audio-cleanup-title">Audio cleanup</h2><p className="path">{file.path}</p></div>
+          <button onClick={onClose}>Close</button>
+        </div>
+        {!inspection && <p>Inspecting the current file…</p>}
+        {inspection && (
+          <>
+            <div className="metrics compact">
+              <Metric label="Engine" value={inspection.backend === "mkvmerge" ? "MKVToolNix" : "FFmpeg"} />
+              <Metric label="Output" value="MKV stream copy" />
+              <Metric label="Other streams" value={inspection.non_audio_stream_count || 0} />
+              <Metric label="Chapters" value={inspection.chapter_count || 0} />
+            </div>
+            {inspection.blockers.map((blocker) => <div className="guidanceWarning" key={blocker}><strong>Blocked</strong><span>{blocker}</span></div>)}
+            {inspection.warnings.map((warning) => <div className="guidanceWarning" key={warning}><strong>Publish warning</strong><span>{warning}</span></div>)}
+            <div className="audioTrackChoices">
+              {inspection.audio_tracks.map((track) => {
+                const isRemoved = removed.has(track.selection_key);
+                const isLastRetained = !isRemoved && retained.length === 1;
+                return (
+                  <div className={`audioTrackChoice ${isRemoved ? "removed" : ""}`} key={track.selection_key}>
+                    <label className="checkRow">
+                      <input type="checkbox" checked={isRemoved} disabled={isLastRetained} onChange={() => toggleTrack(track)} />
+                      <span><strong>{trackLabel(track)}</strong><span className="muted">{audioTrackDetails(track)}</span></span>
+                    </label>
+                    <span>{isRemoved ? <Badge tone="bad">Remove</Badge> : <Badge tone="good">Keep</Badge>}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {removedDefault && (
+              <div className="defaultTrackChoice">
+                <strong>Choose the replacement default track</strong>
+                {retained.map((track) => (
+                  <label className="inlineCheck" key={track.selection_key}>
+                    <input type="radio" name="replacement-default" checked={replacementDefault === track.selection_key} onChange={() => setReplacementDefault(track.selection_key)} />
+                    {trackLabel(track)}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="pathComparison">
+              <div><strong>Staged output</strong><span className="path">{inspection.staged_path}</span></div>
+              <div><strong>Live publish path</strong><span className="path">{inspection.publish_path}</span></div>
+            </div>
+            <div className="rowActions">
+              <button onClick={onClose}>Cancel</button>
+              <button className="primary" disabled={!canSave || saving} onClick={addToBatch}>{saving ? "Adding…" : "Add to batch"}</button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function AudioCleanupBatchDrawer({
+  batch,
+  onClose,
+  onBatchChange,
+  onEdit,
+  onQueued,
+  onToast
+}: {
+  batch: AudioCleanupBatch;
+  onClose: () => void;
+  onBatchChange: (batch: AudioCleanupBatch) => void;
+  onEdit: (fileId: number) => Promise<void>;
+  onQueued: () => void;
+  onToast: (message: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [queueing, setQueueing] = useState(false);
+
+  async function remove(fileId: number) {
+    try {
+      onBatchChange(await api<AudioCleanupBatch>(`/api/audio-cleanup/batch/items/${fileId}`, { method: "DELETE" }));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function clear() {
+    if (!window.confirm("Clear every item from the audio cleanup batch? No media files will be changed.")) return;
+    try {
+      onBatchChange(await api<AudioCleanupBatch>("/api/audio-cleanup/batch", { method: "DELETE" }));
+    } catch (error) {
+      onToast(String(error));
+    }
+  }
+
+  async function queue() {
+    const summary = batch.items.map((item) => `${item.source_path}\n  remove: ${item.operation.removed_tracks.map(trackLabel).join(", ")}\n  publish: ${item.publish_path}`).join("\n\n");
+    if (!window.confirm(`Queue this staged audio cleanup batch?\n\n${summary}\n\nOriginals will not change until each verified output is explicitly published.`)) return;
+    setQueueing(true);
+    try {
+      await api("/api/audio-cleanup/batch/queue", { method: "POST", body: JSON.stringify({ name: name.trim() || null }) });
+      onToast("Audio cleanup batch queued.");
+      onQueued();
+    } catch (error) {
+      onToast(String(error));
+    } finally {
+      setQueueing(false);
+    }
+  }
+
+  return (
+    <div className="drawerBackdrop" onClick={onClose}>
+      <aside className="drawer audioBatchDrawer" onClick={(event) => event.stopPropagation()}>
+        <div className="drawerHeader"><div><h2>Audio cleanup batch</h2><p className="muted">One persistent draft · {batch.item_count} item(s)</p></div><button onClick={onClose}>Close</button></div>
+        {!batch.items.length && <Panel title="Empty batch"><p className="muted">Open a multi-audio Library item and choose Manage audio tracks to add it here.</p></Panel>}
+        <div className="audioBatchItems">
+          {batch.items.map((item) => (
+            <Panel key={item.id} title={item.source_path.split(/[\\/]/).pop() || item.source_path}>
+              <div className="detailGrid">
+                <Metric label="Engine" value={item.operation.backend === "mkvmerge" ? "MKVToolNix" : "FFmpeg"} />
+                <Metric label="Remove" value={item.operation.removed_tracks.length} />
+                <Metric label="Retain" value={item.operation.retained_tracks.length} />
+                <Metric label="Publish as" value={item.publish_path.split(/[\\/]/).pop() || item.publish_path} />
+              </div>
+              <p><strong>Removing:</strong> {item.operation.removed_tracks.map(trackLabel).join(", ")}</p>
+              <p><strong>Retaining:</strong> {item.operation.retained_tracks.map(trackLabel).join(", ")}</p>
+              {item.warnings.map((warning) => <div className="guidanceWarning" key={warning}><strong>Warning</strong><span>{warning}</span></div>)}
+              <details><summary>Command and paths</summary><pre className="json">{item.operation.command_display}</pre><p className="path">Staged: {item.target_path}</p><p className="path">Live: {item.publish_path}</p></details>
+              <div className="rowActions"><button onClick={() => onEdit(item.file_id)}>Edit</button><button className="danger" onClick={() => remove(item.file_id)}>Remove</button></div>
+            </Panel>
+          ))}
+        </div>
+        {batch.items.length > 0 && (
+          <div className="audioBatchActions">
+            <label>Run name<input value={name} maxLength={180} onChange={(event) => setName(event.target.value)} placeholder="Audio cleanup date/time" /></label>
+            <div className="rowActions"><button className="danger" onClick={clear}>Clear batch</button><button className="primary" disabled={queueing} onClick={queue}>{queueing ? "Validating…" : "Review and queue"}</button></div>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function trackLabel(track: AudioCleanupTrack) {
+  return `${track.language || "Undetermined"} ${track.title || track.codec_name || `track ${track.audio_ordinal + 1}`}`.trim();
+}
+
+function audioTrackDetails(track: AudioCleanupTrack) {
+  return [
+    track.codec_name?.toUpperCase(),
+    track.profile,
+    track.channel_layout || (track.channels ? `${track.channels} channels` : null),
+    track.bit_rate ? `${Math.round(track.bit_rate / 1000).toLocaleString()} kbps` : null,
+    track.default ? "default" : null,
+    track.forced ? "forced" : null
+  ].filter(Boolean).join(" · ");
 }
 
 function PlexStatusPanel({ status }: { status?: PlexStatus }) {
@@ -3525,7 +3845,7 @@ function TranscodeSavingsPanel({ stats }: { stats: TranscodeSavingsStats | null 
       <div className="scanStats">
         <span><strong>{stats.runs_started}</strong> runs started</span>
         <span><strong>{stats.runs_succeeded}</strong> runs succeeded</span>
-        <span><strong>{stats.items_succeeded}</strong> items transcoded</span>
+        <span><strong>{stats.items_succeeded}</strong> items processed</span>
         <span><strong>{stats.items_published}</strong> published</span>
         <span><strong>{stats.items_validated}</strong> validated</span>
         <span><strong>{stats.items_cleaned}</strong> cleaned</span>

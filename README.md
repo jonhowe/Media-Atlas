@@ -2,7 +2,7 @@
 
 # Media Atlas
 
-Media Atlas is a local-first media inventory, retention-review, and transcode execution web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, correlates requested-but-unwatched media across Seerr and Arr services, provides searchable reporting, generates transcode plans, and can run staged `ffmpeg` jobs.
+Media Atlas is a local-first media inventory, retention-review, and media-processing web app. It scans configured media roots with `ffprobe`, stores technical metadata in SQLite, enriches library rows with optional Plex metadata, correlates requested-but-unwatched media across Seerr and Arr services, provides searchable reporting, generates transcode plans, runs staged `ffmpeg` jobs, and can remove selected audio streams without re-encoding media.
 
 Media Atlas stages transcode output separately from originals by default. Replacing a source file is only available through an explicit manual publish action for verified outputs, requires two confirmations, and moves the original into transcode backup storage first.
 
@@ -11,6 +11,7 @@ Media Atlas stages transcode output separately from originals by default. Replac
 - Configure one or more local or mounted media roots.
 - Recursively scan media files and skip unchanged files on rescans.
 - Store raw `ffprobe` JSON plus normalized codec, container, stream, bitrate, duration, HDR, subtitle, and audio fields.
+- Filter for files with multiple audio streams, inspect their tracks, and build a persistent batch that removes selected audio without re-encoding.
 - Optionally sync Plex libraries for title, year, show/season/episode, collection, genre, label, watched state, and match status.
 - Correlate Seerr requests, Sonarr/Radarr-managed files, and Plex history to report whole movies or series that nobody has watched after a configurable waiting period.
 - Export retention candidates, create a transcode plan without starting it, or delete one freshly revalidated copy through its owning Arr service with a typed confirmation and immutable audit trail.
@@ -216,6 +217,14 @@ After you validate a published file in your media library, the Transcode Runs pa
 
 Published items must be marked validated before cleanup is available. This keeps cleanup tied to your explicit confirmation that the replacement is working in the live library.
 
+## Removing Audio Streams
+
+In Library, enable **Multiple audio streams only**, open a file, and choose **Manage audio streams**. Media Atlas performs a fresh inspection, shows stable track identifiers and language/default metadata, and requires at least one audio stream to remain. If the removed stream is the default, choose which retained stream becomes the new default before adding the operation to the persistent batch.
+
+Matroska sources use MKVToolNix. Other supported containers use FFmpeg stream copy and publish as a sibling `.mkv` file, because changing the container while retaining the old extension would be misleading. A conflicting staged or live destination blocks the operation. Before execution and again before publish, Media Atlas checks a source fingerprint so a changed file cannot silently receive a stale track selection.
+
+Audio cleanup uses the same staged run, strict verification, two-confirmation publish, backup, validation, and cleanup lifecycle as transcodes. Verification requires Matroska output, the exact retained audio-track signatures, unchanged non-audio streams, unchanged chapters, and an acceptable duration. No video, audio, or subtitle stream is re-encoded. Publishing a non-Matroska source moves the original to backup, writes the verified sibling `.mkv`, and refreshes the inventory path and streams.
+
 ## First Run Checklist
 
 After the container is running:
@@ -279,6 +288,7 @@ Most installs can leave these at the example defaults. Adjust them when changing
 | `MEDIA_ATLAS_FFMPEG_TIMEOUT_SECONDS` | Transcode timeout | `.env` | Global `ffmpeg` timeout for each item. `0` means no timeout, which is the normal default for long encodes. |
 | `MEDIA_ATLAS_FFPROBE_PATH` | `ffprobe` command path | advanced env | Command or absolute path used for media metadata probing and output verification. Docker image default: `ffprobe`. |
 | `MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS` | Probe timeout | `.env` | Per-file `ffprobe` timeout during scans. Minimum enforced value is `5`. Default: `60`. |
+| `MEDIA_ATLAS_MKVMERGE_PATH` | `mkvmerge` command path | advanced env | Command or absolute path used for lossless Matroska audio-track removal. Docker image default: `mkvmerge`. Local installs require MKVToolNix on `PATH` unless overridden. |
 | `MEDIA_ATLAS_HOST` | Backend bind host | `docker-compose.yml` environment | Backend bind address. Docker should use `0.0.0.0` so port publishing works. Local development should usually use `127.0.0.1`. |
 | `MEDIA_ATLAS_IMAGE` | Container image tag | `.env` | Compose-only variable used by `docker-compose.yml` to choose the GHCR image. Use `latest` for convenience or a pinned release tag for production rollback safety. |
 | `LIBVA_DRIVER_NAME` | VAAPI driver name | Docker image default or `.env` override | VAAPI driver selected by libva. The Docker image defaults to `iHD` for Intel iGPUs, including Raptor Lake and newer. Override or unset it only for non-Intel VAAPI hardware. |

@@ -6,7 +6,7 @@ Use this only when working on Media Atlas source code. Normal installs should us
 
 - Python 3.12+
 - Node.js 20+
-- `ffmpeg` and `ffprobe` on `PATH`
+- `ffmpeg`, `ffprobe`, and MKVToolNix (`mkvmerge`) on `PATH`
 - Git
 
 ## Clone

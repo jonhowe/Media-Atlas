@@ -49,6 +49,7 @@ def readiness_status() -> dict[str, Any]:
         and all(item["ok"] for item in checks["disk"].values())
         and checks["tools"]["ffprobe"]["available"]
         and checks["tools"]["ffmpeg"]["available"]
+        and checks["tools"]["mkvmerge"]["available"]
         and not CONFIG.config_warnings
         and not auth_warnings()
     )
@@ -208,17 +209,18 @@ def _tool_checks() -> dict[str, dict[str, Any]]:
     return {
         "ffprobe": _tool_payload(CONFIG.scanner.ffprobe_path),
         "ffmpeg": _tool_payload(CONFIG.transcoder.ffmpeg_path),
+        "mkvmerge": _tool_payload(CONFIG.transcoder.mkvmerge_path, "--version"),
     }
 
 
-def _tool_payload(command: str) -> dict[str, Any]:
+def _tool_payload(command: str, version_argument: str = "-version") -> dict[str, Any]:
     resolved = shutil.which(command) if not os.path.isabs(command) else command
     if not resolved:
         return {"command": command, "available": False, "version": None}
     version = None
     try:
         result = subprocess.run(
-            [resolved, "-version"],
+            [resolved, version_argument],
             check=False,
             capture_output=True,
             text=True,

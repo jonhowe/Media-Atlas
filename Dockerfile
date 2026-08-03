@@ -32,6 +32,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ATLAS_ALLOWED_BROWSE_ROOTS=/media \
     MEDIA_ATLAS_FFPROBE_PATH=ffprobe \
     MEDIA_ATLAS_FFMPEG_PATH=ffmpeg \
+    MEDIA_ATLAS_MKVMERGE_PATH=mkvmerge \
     MEDIA_ATLAS_SCAN_CONCURRENCY=2 \
     MEDIA_ATLAS_FFPROBE_TIMEOUT_SECONDS=60 \
     MEDIA_ATLAS_MARK_MISSING_FILES=true \
@@ -47,7 +48,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN set -eux; \
     apt-get update; \
-    packages="ffmpeg intel-media-va-driver libva-drm2 libva2 libvpl2 vainfo"; \
+    packages="ffmpeg mkvtoolnix intel-media-va-driver libva-drm2 libva2 libvpl2 vainfo"; \
     if apt-cache show libmfx1 >/dev/null 2>&1; then \
         packages="$packages libmfx1"; \
     fi; \

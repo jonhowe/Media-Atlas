@@ -677,6 +677,80 @@ label {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.audioTracksTable td:first-child {
+  width: 88px;
+}
+
+.audioCleanupDialog {
+  max-width: 900px;
+}
+
+.audioTrackChoices,
+.audioBatchItems {
+  display: grid;
+  gap: 10px;
+}
+
+.audioTrackChoice {
+  align-items: center;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.audioTrackChoice.removed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.audioTrackChoice .checkRow {
+  align-items: start;
+  flex: 1;
+}
+
+.audioTrackChoice .checkRow > span,
+.audioTrackChoice .checkRow > span > span {
+  display: block;
+}
+
+.defaultTrackChoice,
+.pathComparison,
+.audioBatchActions {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.pathComparison {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pathComparison > div {
+  display: grid;
+  gap: 5px;
+}
+
+.audioBatchDrawer {
+  max-width: 940px;
+  width: min(940px, 96vw);
+}
+
+.audioBatchActions {
+  bottom: 0;
+  margin-top: 16px;
+  position: sticky;
+}
+
+.audioBatchActions .rowActions {
+  justify-content: flex-end;
+}
+
 .compactList > div {
   align-items: center;
   border-bottom: 1px solid var(--divider-soft);
@@ -1462,6 +1536,14 @@ label {
     background: var(--primary);
     border-color: var(--primary);
     color: var(--primary-contrast);
+  }
+
+  .pathComparison {
+    grid-template-columns: 1fr;
+  }
+
+  .audioTrackChoice {
+    align-items: start;
   }
 }
 

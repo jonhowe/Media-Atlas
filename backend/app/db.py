@@ -1027,6 +1027,32 @@ MIGRATIONS: list[tuple[str, str]] = [
             );
         """,
     ),
+    (
+        "0010_audio_cleanup_batches",
+        """
+        ALTER TABLE transcode_plans ADD COLUMN plan_kind TEXT NOT NULL DEFAULT 'transcode';
+        ALTER TABLE transcode_plan_items ADD COLUMN operation_type TEXT NOT NULL DEFAULT 'transcode';
+        ALTER TABLE transcode_plan_items ADD COLUMN backend TEXT NOT NULL DEFAULT 'ffmpeg';
+        ALTER TABLE transcode_plan_items ADD COLUMN operation_json TEXT;
+        ALTER TABLE transcode_plan_items ADD COLUMN publish_path TEXT;
+        UPDATE transcode_plan_items SET publish_path = source_path WHERE publish_path IS NULL;
+
+        ALTER TABLE transcode_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'transcode';
+        ALTER TABLE transcode_run_items ADD COLUMN operation_type TEXT NOT NULL DEFAULT 'transcode';
+        ALTER TABLE transcode_run_items ADD COLUMN backend TEXT NOT NULL DEFAULT 'ffmpeg';
+        ALTER TABLE transcode_run_items ADD COLUMN operation_json TEXT;
+        ALTER TABLE transcode_run_items ADD COLUMN publish_path TEXT;
+        UPDATE transcode_run_items SET publish_path = source_path WHERE publish_path IS NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_transcode_plans_one_audio_cleanup_draft
+          ON transcode_plans(plan_kind)
+          WHERE plan_kind = 'audio_cleanup' AND status = 'draft' AND archived_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_transcode_plans_kind_status
+          ON transcode_plans(plan_kind, status, archived_at);
+        CREATE INDEX IF NOT EXISTS idx_transcode_run_items_operation
+          ON transcode_run_items(operation_type, backend);
+        """,
+    ),
 ]
 
 

@@ -55,7 +55,7 @@ docker compose -f docker-compose.yml -f intel-vaapi.override.yml up -d
 - `docs/compose/writable-publish.override.yml`: remounts `/media` read-write for the manual Publish action.
 - `docs/compose/reverse-proxy-trusted.override.yml`: enables trusted-header auth behind an authenticating proxy.
 
-Keep the default `/media:ro` mount unless you intentionally want Media Atlas to publish staged outputs back over originals.
+Keep the default `/media:ro` mount unless you intentionally want Media Atlas to publish staged outputs back over originals. The published image includes FFmpeg, FFprobe, and MKVToolNix; Admin Status reports all three required media tools.
 
 ## Admin Status And Diagnostics
 

@@ -5,9 +5,10 @@ Media Atlas is a local-first FastAPI, SQLite, and React application packaged as 
 ## Runtime Shape
 
 - FastAPI serves both `/api/*` endpoints and the built frontend assets.
-- SQLite stores media roots, scan jobs, normalized `ffprobe` metadata, Plex enrichment, transcode plans/runs, retention connections, analysis snapshots, Plex watch evidence, immutable remediation audits, publish state, cleanup state, and settings.
+- SQLite stores media roots, scan jobs, normalized `ffprobe` metadata, Plex enrichment, transcode and audio-cleanup plans/runs, retention connections, analysis snapshots, Plex watch evidence, immutable remediation audits, publish state, cleanup state, and settings.
 - `ffprobe` is used for scan metadata and output verification.
-- `ffmpeg` is used only for app-generated transcode commands.
+- `ffmpeg` is used for app-generated transcodes and lossless stream-copy audio cleanup outside Matroska.
+- `mkvmerge` is used for lossless audio-track removal from Matroska sources.
 - One scan, one Plex sync, one media-retention analysis, and one transcode worker are managed in-process.
 - Structured application events are mirrored to stdout and a daily UTC-rotated JSONL file. The UI reads only managed application files under the configured logs directory; it never accepts an arbitrary log path.
 
@@ -36,7 +37,9 @@ The Docker install bind-mounts persistent directories:
 
 ## Safety Model
 
-Scans, analysis, and Plex syncs are read-only. Transcodes write staged outputs only. Replacing an original requires the manual Publish action, two confirmations, a verified staged output, and backup storage. Published items must be marked validated before cleanup can delete staged outputs and backups.
+Scans, analysis, and Plex syncs are read-only. Transcodes and audio cleanup write staged outputs only. Replacing an original requires the manual Publish action, two confirmations, a verified staged output, and backup storage. Published items must be marked validated before cleanup can delete staged outputs and backups.
+
+Audio cleanup stores opaque tool track IDs plus a fingerprint of the freshly inspected source and its stream/chapter layout. It requires at least one retained audio stream and an explicit replacement default when removing the current default. The batch is revalidated before queueing, each item is revalidated immediately before tool execution, and it is checked again before publish. Verification compares exact retained audio signatures, non-audio streams, chapters, container, and duration. Non-Matroska sources publish as a sibling `.mkv`; destination collisions are blockers and the inventory refresh is part of the guarded publish transaction.
 
 The primary planner limits selection to one actionable recommendation category at a time. Profile suggestions are advisory, but mismatched overrides are explicit and review-only plans cannot start because they contain no generated commands.
 
@@ -48,4 +51,4 @@ Supported modes are `disabled`, `single_admin`, and `reverse_proxy_trusted`. Doc
 
 ## Deployment
 
-GHCR releases publish one image containing Python, the backend, the frontend build, FFmpeg, FFprobe, and Intel iHD VAAPI support. See `docs/DEPLOYMENT.md` and `docs/OPERATIONS.md` for install and runbook details.
+GHCR releases publish one image containing Python, the backend, the frontend build, FFmpeg, FFprobe, MKVToolNix, and Intel iHD VAAPI support. See `docs/DEPLOYMENT.md` and `docs/OPERATIONS.md` for install and runbook details.

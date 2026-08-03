@@ -4,6 +4,7 @@ import asyncio
 import errno
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Callable
 
 from .. import db
 from ..config import CONFIG
+from .audio_cleanup import preflight_operation as preflight_audio_cleanup
+from .audio_cleanup import verify_output as verify_audio_cleanup_output
 from .ffprobe import ProbeError, probe_file
 from .paths import safe_shell_join
 from .recommendations import transcode_warnings
@@ -121,12 +124,22 @@ class TranscodeManager:
         if queued:
             await self.ensure_worker()
 
-    async def create_run(self, plan_id: int, name: str | None = None) -> dict[str, Any]:
+    async def create_run(
+        self,
+        plan_id: int,
+        name: str | None = None,
+        *,
+        audio_cleanup_validated: bool = False,
+    ) -> dict[str, Any]:
         plan = db.query_one("SELECT * FROM transcode_plans WHERE id = ?", (plan_id,))
         if not plan:
             raise ValueError("Transcode plan not found.")
         if plan.get("archived_at"):
             raise ValueError("Archived transcode plans cannot be started. Unarchive the plan first.")
+        if plan.get("plan_kind") == "audio_cleanup" and not audio_cleanup_validated:
+            raise ValueError("Audio-cleanup batches must be started from the audio-cleanup queue endpoint.")
+        if plan.get("plan_kind") == "audio_cleanup" and plan.get("status") != "draft":
+            raise ValueError("This audio-cleanup batch has already been submitted.")
         items = db.query_all("SELECT * FROM transcode_plan_items WHERE plan_id = ? ORDER BY id", (plan_id,))
         runnable = [item for item in items if item.get("command_json")]
         if not runnable:
@@ -146,11 +159,11 @@ class TranscodeManager:
         run_id = db.execute(
             """
             INSERT INTO transcode_runs (
-                plan_id, name, status, created_at, total_items, message
+                plan_id, name, status, created_at, total_items, message, run_kind
             )
-            VALUES (?, ?, 'queued', ?, ?, 'Run queued.')
+            VALUES (?, ?, 'queued', ?, ?, 'Run queued.', ?)
             """,
-            (plan_id, name or f"Run for {plan['name']}", now, len(runnable)),
+            (plan_id, name or f"Run for {plan['name']}", now, len(runnable), plan.get("plan_kind") or "transcode"),
         )
         rows = []
         for item in runnable:
@@ -167,18 +180,28 @@ class TranscodeManager:
                     item["warnings_json"],
                     file_sizes.get(item["file_id"]),
                     now,
+                    item.get("operation_type") or "transcode",
+                    item.get("backend") or "ffmpeg",
+                    item.get("operation_json"),
+                    item.get("publish_path") or item["source_path"],
                 )
             )
         db.executemany(
             """
             INSERT INTO transcode_run_items (
                 run_id, plan_item_id, file_id, status, source_path, target_path,
-                command_json, command_display, warnings_json, source_size_bytes, created_at
+                command_json, command_display, warnings_json, source_size_bytes, created_at,
+                operation_type, backend, operation_json, publish_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
+        if plan.get("plan_kind") == "audio_cleanup":
+            db.execute(
+                "UPDATE transcode_plans SET status = 'submitted', updated_at = ? WHERE id = ?",
+                (db.utc_now(), plan_id),
+            )
         await self.ensure_worker()
         return db.query_one("SELECT * FROM transcode_runs WHERE id = ?", (run_id,)) or {"id": run_id}
 
@@ -213,7 +236,7 @@ class TranscodeManager:
         items = db.query_all("SELECT * FROM transcode_run_items WHERE run_id = ? ORDER BY id", (run_id,))
         eligible_items = [item for item in items if item.get("published_at") and item.get("validated_at")]
         if not eligible_items:
-            raise ValueError("No validated, published transcode items are available for cleanup.")
+            raise ValueError("No validated, published run items are available for cleanup.")
 
         summary: dict[str, Any] = {
             "items_seen": len(eligible_items),
@@ -289,9 +312,9 @@ class TranscodeManager:
         if not item:
             raise ValueError("Transcode run item not found.")
         if not item.get("published_at"):
-            raise ValueError("Only published transcode items can be cleaned up.")
+            raise ValueError("Only published run items can be cleaned up.")
         if not item.get("validated_at"):
-            raise ValueError("Published transcode items must be marked validated before cleanup.")
+            raise ValueError("Published run items must be marked validated before cleanup.")
         self._cleanup_item_artifacts(item)
         return db.query_one("SELECT * FROM transcode_run_items WHERE id = ? AND run_id = ?", (item_id, run_id)) or item
 
@@ -308,7 +331,7 @@ class TranscodeManager:
         if not item:
             raise ValueError("Transcode run item not found.")
         if not item.get("published_at"):
-            raise ValueError("Only published transcode items can be marked validated.")
+            raise ValueError("Only published run items can be marked validated.")
         now = db.utc_now()
         db.execute(
             """
@@ -467,6 +490,7 @@ class TranscodeManager:
         source_path: str,
         target_path: str,
         confirmation_text: str,
+        publish_path: str | None = None,
     ) -> dict[str, Any]:
         if confirmation_text != "REPLACE":
             raise ValueError("Publish requires the confirmation text REPLACE.")
@@ -474,16 +498,22 @@ class TranscodeManager:
         if not item:
             raise ValueError("Transcode run item not found.")
         if item.get("published_at"):
-            raise ValueError("This transcode item has already been published.")
+            raise ValueError("This run item has already been published.")
         if item.get("publish_status") in {"queued", "running"}:
-            raise ValueError("This transcode item is already being published.")
+            raise ValueError("This run item is already being published.")
         if item["status"] != "succeeded" or item.get("verification_status") != "verified":
-            raise ValueError("Only verified, successful transcode items can be published.")
+            raise ValueError("Only verified, successful run items can be published.")
         if source_path != item["source_path"] or target_path != item["target_path"]:
             raise ValueError("Submitted source or staged output path does not match the run item.")
+        stored_publish_path = item.get("publish_path") or item["source_path"]
+        if publish_path is not None and publish_path != stored_publish_path:
+            raise ValueError("Submitted live publish path does not match the run item.")
+        if item.get("operation_type") == "audio_cleanup" and stored_publish_path != item["source_path"] and publish_path is None:
+            raise ValueError("Audio cleanup with a renamed live path requires the exact publish path.")
 
         source = Path(item["source_path"])
         target = Path(item["target_path"])
+        destination = Path(stored_publish_path)
         now = db.utc_now()
         db.execute(
             """
@@ -512,7 +542,10 @@ class TranscodeManager:
         if source.resolve() == target.resolve():
             self._store_publish_failure(item_id, "Source and staged output paths must be different.")
             raise ValueError("Source and staged output paths must be different.")
-        if not os.access(source, os.R_OK) or not os.access(source.parent, os.W_OK):
+        if destination != source and destination.exists():
+            self._store_publish_failure(item_id, "The planned live MKV destination already exists.")
+            raise ValueError("The planned live MKV destination already exists.")
+        if not os.access(source, os.R_OK) or not os.access(source.parent, os.W_OK) or not os.access(destination.parent, os.W_OK):
             self._store_publish_failure(
                 item_id,
                 "Original source file is not readable or its directory is not writable. Check the media mount mode.",
@@ -527,15 +560,24 @@ class TranscodeManager:
             self._store_publish_failure(item_id, "Transcode backup directory is not writable.")
             raise ValueError("Transcode backup directory is not writable.")
 
+        if item.get("operation_type") == "audio_cleanup":
+            preflight_errors = asyncio.run(
+                preflight_audio_cleanup(item, json.loads(item["command_json"]))
+            )
+            if preflight_errors:
+                message = "Publish revalidation failed: " + "; ".join(preflight_errors)
+                self._store_publish_failure(item_id, message)
+                raise ValueError(message)
+
         backup_path = _publish_backup_path(source, run_id, item_id)
-        temp_path = _publish_temp_path(source, run_id, item_id)
+        temp_path = _publish_temp_path(destination, run_id, item_id)
         source_size = source.stat().st_size
         target_size = target.stat().st_size
         total_bytes = max(1, source_size + target_size)
         self._store_publish_progress(
             item_id,
             "copying_staged_output",
-            "Copying staged output into a temporary file beside the original.",
+            "Copying staged output into a temporary file beside the live destination.",
             0,
             total_bytes,
         )
@@ -548,7 +590,7 @@ class TranscodeManager:
                 lambda done: self._store_publish_progress(
                     item_id,
                     "copying_staged_output",
-                    "Copying staged output into a temporary file beside the original.",
+                    "Copying staged output into a temporary file beside the live destination.",
                     done,
                     total_bytes,
                 ),
@@ -577,17 +619,24 @@ class TranscodeManager:
                 self._store_publish_progress(
                     item_id,
                     "replacing_original",
-                    "Replacing original path with staged output.",
+                    "Publishing the staged output to its live path.",
                     total_bytes,
                     total_bytes,
                 )
-                temp_path.replace(source)
-            except OSError:
+                temp_path.replace(destination)
+                if item.get("operation_type") == "audio_cleanup":
+                    from .audio_cleanup import refresh_inventory_after_publish
+
+                    live_probe = asyncio.run(probe_file(destination))
+                    refresh_inventory_after_publish(int(item["file_id"]), destination, live_probe)
+            except Exception:
+                if destination.exists():
+                    destination.unlink(missing_ok=True)
                 if backup_path.exists() and not source.exists():
                     self._store_publish_progress(
                         item_id,
                         "rolling_back",
-                        "Replacement failed; moving backup back to the original path.",
+                        "Publish failed; moving the backup back to the original path.",
                         0,
                         max(1, source_size),
                     )
@@ -599,13 +648,13 @@ class TranscodeManager:
                         lambda done: self._store_publish_progress(
                             item_id,
                             "rolling_back",
-                            "Replacement failed; moving backup back to the original path.",
+                            "Publish failed; moving the backup back to the original path.",
                             done,
                             max(1, source_size),
                         ),
                     )
                 raise
-        except OSError as exc:
+        except Exception as exc:
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
             message = f"Publish failed: {exc}"
@@ -631,7 +680,7 @@ class TranscodeManager:
             """,
             (
                 finished_at,
-                "Published staged output to original source path. Original file was moved to transcode backup storage.",
+                f"Published staged output to {destination}. Original file was moved to transcode backup storage.",
                 finished_at,
                 total_bytes,
                 total_bytes,
@@ -723,7 +772,7 @@ class TranscodeManager:
         command = json.loads(item["command_json"])
         duration = item.get("duration_seconds") or self._source_duration(item["file_id"])
         try:
-            preflight_errors = self._preflight_item(item, command)
+            preflight_errors = await self._preflight_item(item, command)
             if preflight_errors:
                 with log_path.open("a", encoding="utf-8") as log_file:
                     log_file.write(f"[{now}] Preflight failed:\n")
@@ -733,21 +782,37 @@ class TranscodeManager:
                 return
             with log_path.open("a", encoding="utf-8") as log_file:
                 log_file.write(f"[{now}] {safe_shell_join(command)}\n\n")
-                exit_code = await self._execute_ffmpeg(item, command, log_file, duration)
+                exit_code = await self._execute_command(item, command, log_file, duration)
             if self._is_run_cancel_requested(run_id):
                 self._finish_item(item["id"], "canceled", exit_code, "canceled", "Canceled by user.")
-            elif exit_code == 0:
+            elif exit_code == 0 or (item.get("backend") == "mkvmerge" and exit_code == 1):
+                if item.get("backend") == "mkvmerge" and exit_code == 1:
+                    warnings = db.loads_json(item.get("warnings_json"), [])
+                    warnings.append("MKVToolNix completed with warnings; inspect the item log before publishing.")
+                    db.execute("UPDATE transcode_run_items SET warnings_json = ? WHERE id = ?", (db.dumps(warnings), item["id"]))
                 verification_status, verification_message = await self._verify_output(item, duration)
                 status = "succeeded" if verification_status == "verified" else "verification_failed"
                 self._finish_item(item["id"], status, exit_code, verification_status, verification_message)
             else:
-                self._finish_item(item["id"], "failed", exit_code, "not_run", f"ffmpeg exited with {exit_code}.")
+                engine = "MKVToolNix" if item.get("backend") == "mkvmerge" else "FFmpeg"
+                self._finish_item(item["id"], "failed", exit_code, "not_run", f"{engine} exited with {exit_code}.")
         except Exception as exc:
             self._finish_item(item["id"], "failed", None, "not_run", str(exc))
         finally:
             self._process = None
             self._running_item_id = None
             self._refresh_run_status(run_id)
+
+    async def _execute_command(
+        self,
+        item: dict[str, Any],
+        command: list[str],
+        log_file: Any,
+        duration: float | None,
+    ) -> int:
+        if item.get("backend") == "mkvmerge":
+            return await self._execute_mkvmerge(item, command, log_file)
+        return await self._execute_ffmpeg(item, command, log_file, duration)
 
     async def _execute_ffmpeg(
         self,
@@ -792,6 +857,37 @@ class TranscodeManager:
         await asyncio.gather(read_stdout(), read_stderr())
         return await proc.wait()
 
+    async def _execute_mkvmerge(
+        self,
+        item: dict[str, Any],
+        command: list[str],
+        log_file: Any,
+    ) -> int:
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._process = proc
+
+        async def read_stream(stream: asyncio.StreamReader, parse_progress: bool) -> None:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                decoded = line.decode("utf-8", "replace")
+                log_file.write(decoded)
+                log_file.flush()
+                if parse_progress and "#GUI#progress" in decoded:
+                    match = re.search(r"#GUI#progress\D+(\d{1,3})", decoded)
+                    if match:
+                        percent = min(99.0, float(match.group(1)))
+                        await asyncio.to_thread(self._store_percent_progress, item["id"], percent)
+
+        assert proc.stdout is not None and proc.stderr is not None
+        await asyncio.gather(read_stream(proc.stdout, True), read_stream(proc.stderr, False))
+        return await proc.wait()
+
     def _with_progress(self, command: list[str]) -> list[str]:
         if len(command) < 2:
             return command
@@ -827,19 +923,34 @@ class TranscodeManager:
         if item:
             self._refresh_run_progress(item["run_id"])
 
-    def _preflight_item(self, item: dict[str, Any], command: list[Any]) -> list[str]:
+    def _store_percent_progress(self, item_id: int, percent: float) -> None:
+        db.execute(
+            "UPDATE transcode_run_items SET progress_percent = ? WHERE id = ?",
+            (percent, item_id),
+        )
+        item = db.query_one("SELECT run_id FROM transcode_run_items WHERE id = ?", (item_id,))
+        if item:
+            self._refresh_run_progress(item["run_id"])
+
+    async def _preflight_item(self, item: dict[str, Any], command: list[Any]) -> list[str]:
         errors: list[str] = []
         source = Path(item["source_path"])
         target = Path(item["target_path"])
         if not isinstance(command, list) or not command or any(not isinstance(part, str) for part in command):
             errors.append("Stored transcode command is invalid.")
             return errors
-        if command[0] != CONFIG.transcoder.ffmpeg_path:
-            errors.append("Stored command does not use the configured ffmpeg executable.")
+        backend = item.get("backend") or "ffmpeg"
+        expected_executable = CONFIG.transcoder.mkvmerge_path if backend == "mkvmerge" else CONFIG.transcoder.ffmpeg_path
+        if backend not in {"ffmpeg", "mkvmerge"}:
+            errors.append("Stored command uses an unsupported execution backend.")
+        elif command[0] != expected_executable:
+            errors.append(f"Stored command does not use the configured {backend} executable.")
         if item["source_path"] not in command:
             errors.append("Stored command does not reference the expected source path.")
-        if command[-1] != item["target_path"]:
+        if item["target_path"] not in command:
             errors.append("Stored command does not write to the expected staged target path.")
+        if item.get("operation_type") == "audio_cleanup":
+            errors.extend(await preflight_audio_cleanup(item, command))
         if ("hevc_qsv" in command or "hevc_vaapi" in command) and not Path("/dev/dri/renderD128").exists():
             errors.append("Hardware encoder requires /dev/dri/renderD128 inside the container.")
         if not source.exists() or not source.is_file():
@@ -884,6 +995,8 @@ class TranscodeManager:
         )
 
     async def _verify_output(self, item: dict[str, Any], source_duration: float | None) -> tuple[str, str]:
+        if item.get("operation_type") == "audio_cleanup":
+            return await verify_audio_cleanup_output(item)
         target = Path(item["target_path"])
         if not target.exists() or target.stat().st_size == 0:
             return "failed", "Output file was not created or is empty."
@@ -972,12 +1085,14 @@ class TranscodeManager:
         else:
             status = "succeeded"
         progress = round(sum(row["progress_percent"] or 0 for row in rows) / total, 2) if total else 0
+        run = db.query_one("SELECT run_kind FROM transcode_runs WHERE id = ?", (run_id,)) or {}
+        run_label = "Audio cleanup run" if run.get("run_kind") == "audio_cleanup" else "Transcode run"
         message = {
-            "running": "Transcode run is active.",
-            "queued": "Transcode run is queued.",
-            "failed": "Transcode run finished with failures.",
-            "canceled": "Transcode run was canceled.",
-            "succeeded": "Transcode run complete.",
+            "running": f"{run_label} is active.",
+            "queued": f"{run_label} is queued.",
+            "failed": f"{run_label} finished with failures.",
+            "canceled": f"{run_label} was canceled.",
+            "succeeded": f"{run_label} complete.",
         }[status]
         finished_at = db.utc_now() if status in {"failed", "canceled", "succeeded"} else None
         db.execute(

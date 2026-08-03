@@ -3,6 +3,7 @@ export type Health = {
   database_available: boolean;
   ffprobe_available: boolean;
   ffmpeg_available: boolean;
+  mkvmerge_available: boolean;
   data_dir: string;
   reports_dir: string;
   logs_dir: string;
@@ -152,10 +153,90 @@ export type MediaFile = {
   recommendation_summary?: string | null;
   recommendation_reasons?: string[];
   recommendation_warnings?: string[];
-  streams?: Array<Record<string, unknown>>;
+  streams?: MediaStream[];
   chapters?: Array<Record<string, unknown>>;
   raw_probe_json?: string | null;
   plex?: PlexMetadata | null;
+};
+
+export type MediaStream = {
+  id: number;
+  file_id: number;
+  stream_index: number;
+  stream_type: string;
+  codec_name?: string | null;
+  codec_long_name?: string | null;
+  profile?: string | null;
+  language?: string | null;
+  title?: string | null;
+  disposition_default?: number | boolean | null;
+  disposition_forced?: number | boolean | null;
+  channels?: number | null;
+  channel_layout?: string | null;
+  sample_rate?: number | null;
+  bit_rate?: number | null;
+  raw_stream_json?: string;
+};
+
+export type AudioCleanupTrack = {
+  selection_key: string;
+  stream_index: number;
+  audio_ordinal: number;
+  tool_track_id: number;
+  codec_name?: string | null;
+  codec_long_name?: string | null;
+  profile?: string | null;
+  language?: string | null;
+  title?: string | null;
+  channels?: number | null;
+  channel_layout?: string | null;
+  sample_rate?: number | null;
+  bit_rate?: number | null;
+  default: boolean;
+  forced: boolean;
+};
+
+export type AudioCleanupInspection = {
+  file_id: number;
+  filename: string;
+  source_path: string;
+  staged_path?: string;
+  publish_path?: string;
+  backend?: "ffmpeg" | "mkvmerge";
+  output_container?: "mkv";
+  source_fingerprint?: string;
+  audio_tracks: AudioCleanupTrack[];
+  non_audio_stream_count?: number;
+  chapter_count?: number;
+  blockers: string[];
+  warnings: string[];
+};
+
+export type AudioCleanupOperation = {
+  backend: "ffmpeg" | "mkvmerge";
+  removed_tracks: AudioCleanupTrack[];
+  retained_tracks: AudioCleanupTrack[];
+  replacement_default_key?: string | null;
+  publish_path: string;
+  command_display: string;
+};
+
+export type AudioCleanupBatchItem = {
+  id: number;
+  file_id: number;
+  source_path: string;
+  target_path: string;
+  publish_path: string;
+  operation: AudioCleanupOperation;
+  warnings: string[];
+};
+
+export type AudioCleanupBatch = {
+  id?: number | null;
+  name: string;
+  status: string;
+  item_count: number;
+  items: AudioCleanupBatchItem[];
 };
 
 export type PlexMetadata = {
@@ -503,7 +584,8 @@ export type TranscodeProfile = {
 export type TranscodePlan = {
   id: number;
   name: string;
-  profile_id: number;
+  profile_id?: number | null;
+  plan_kind?: "transcode" | "audio_cleanup";
   profile_name?: string;
   status: string;
   created_at: string;
@@ -559,6 +641,7 @@ export type TranscodeRun = {
   progress_percent: number;
   archived_at?: string | null;
   message?: string | null;
+  run_kind?: "transcode" | "audio_cleanup";
   items?: TranscodeRunItem[];
   cleanup_summary?: {
     run_archived?: boolean;
@@ -589,6 +672,9 @@ export type TranscodeRunItem = {
   status: string;
   source_path: string;
   target_path: string;
+  publish_path?: string | null;
+  operation_type?: "transcode" | "audio_cleanup";
+  backend?: "ffmpeg" | "mkvmerge";
   command_display: string;
   log_path?: string | null;
   progress_percent: number;
